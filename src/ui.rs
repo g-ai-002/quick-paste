@@ -257,7 +257,7 @@ impl MemoApp {
             .when(selected, |this| this.bg(selected_bg))
             .hover(move |this| this.bg(hover_bg))
             .cursor_pointer()
-            .on_click(cx.listener(move |this, event, window, cx| {
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if event.click_count() == 2 {
                     this.paste_index(index, window, cx);
                 } else {
