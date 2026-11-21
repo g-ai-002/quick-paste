@@ -8,7 +8,7 @@ use std::{
 use gpui_kit::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::{
-    Foundation::{HWND, WPARAM},
+    Foundation::HWND,
     System::Threading::GetCurrentProcessId,
     UI::{
         Input::KeyboardAndMouse::{
@@ -17,8 +17,7 @@ use windows::Win32::{
         },
         WindowsAndMessaging::{
             GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-            SendMessageW, SetForegroundWindow, ShowWindowAsync, SW_HIDE, SW_RESTORE, SW_SHOW,
-            WM_SETREDRAW,
+            SetForegroundWindow, ShowWindowAsync, SW_HIDE, SW_RESTORE, SW_SHOW,
         },
     },
 };
@@ -52,18 +51,6 @@ pub fn set_main_window(hwnd: isize) {
     MAIN_WINDOW.store(hwnd, Ordering::Relaxed);
 }
 
-fn set_rendering_enabled(hwnd: isize, enabled: bool) {
-    // SAFETY: hwnd 是本进程记录的窗口句柄，WM_SETREDRAW 只切换该窗口的重绘标志。
-    unsafe {
-        let _ = SendMessageW(
-            HWND(hwnd as *mut c_void),
-            WM_SETREDRAW,
-            Some(WPARAM(if enabled { 1 } else { 0 })),
-            None,
-        );
-    }
-}
-
 pub fn hide_window(window: &Window) {
     let Some(hwnd) = window_hwnd(window) else {
         return;
@@ -72,7 +59,6 @@ pub fn hide_window(window: &Window) {
     unsafe {
         let _ = ShowWindowAsync(HWND(hwnd as *mut c_void), SW_HIDE);
     }
-    set_rendering_enabled(hwnd, false);
     crate::memory_trim::schedule_hidden_trim();
 }
 
@@ -85,7 +71,6 @@ pub fn hide_main_window() {
     unsafe {
         let _ = ShowWindowAsync(HWND(hwnd as *mut c_void), SW_HIDE);
     }
-    set_rendering_enabled(hwnd, false);
     crate::memory_trim::schedule_hidden_trim();
 }
 
@@ -105,7 +90,6 @@ pub fn show_main_window() {
         let _ = ShowWindowAsync(handle, command);
         let _ = SetForegroundWindow(handle);
     }
-    set_rendering_enabled(hwnd, true);
     crate::memory_trim::cancel_hidden_trim();
 }
 
