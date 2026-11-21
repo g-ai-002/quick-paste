@@ -1,0 +1,31 @@
+[package]
+name = "quick-paste"
+version = "0.1.0"
+edition = "2024"
+description = "快速粘贴：把纯文本备忘录一键粘贴到刚才的输入框"
+license = "MIT"
+
+[dependencies]
+async-channel = "=2.5.0"
+atomic-write-file = "=0.3.1"
+directories = "=6.0.0"
+global-hotkey = "=0.8.0"
+gpui-kit = "=0.10.0"
+raw-window-handle = "=0.6.2"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_yaml = "=0.9.34"
+thiserror = "=2.0.21"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "=0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+
+[profile.release]
+strip = true
