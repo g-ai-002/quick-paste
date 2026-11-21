@@ -98,6 +98,7 @@ src/
 ├── main.rs             入口
 ├── app.rs              GPUI 启动、窗口参数、全局热键、单实例唤回
 ├── memo.rs             YAML 读写、搜索、数据目录
+├── memory_trim.rs      隐藏后清理工作集（Windows）
 ├── paste.rs            粘贴流程（Windows 实现 / 其他平台空实现）
 ├── paste/platform.rs   前台窗口跟踪、Win32 显示隐藏、SendInput
 ├── single_instance.rs  文件锁单实例与唤回通知
@@ -109,6 +110,49 @@ scripts/package.ps1     setup + portable 打包
 粘贴流程：后台线程每 120ms 记录一次“不属于本进程的前台窗口”。双击备忘录时，
 先把文本写入剪贴板，把前台交还给记录的窗口，隐藏本窗口，再发送 `Ctrl+V`。
 发送前会等待物理 `Ctrl` / `Shift` / `Alt` 松开，避免再次触发本程序热键。
+
+隐藏窗口后，程序会等待 10–30 秒；如果窗口仍不可见且私有工作集超过 30MB，
+就调用 Windows 的 `EmptyWorkingSet` 清理工作集。这只降低任务管理器里的常驻
+内存数字，不会减少私有提交内存；重新打开窗口时，页面会逐渐缺页调回。
+
+## 查看内存占用
+
+先启动 quick-paste（保持运行），在 PowerShell 里执行：
+
+```powershell
+Get-Process quick-paste |
+  Select-Object Id,
+    @{n='WorkingSetMiB';e={[math]::Round($_.WorkingSet64 / 1MB, 1)}},
+    @{n='PrivateCommitMiB';e={[math]::Round($_.PrivateMemorySize64 / 1MB, 1)}}
+```
+
+`WorkingSet64` 是总工作集，包含共享页；`PrivateMemorySize64` 是私有提交，
+通常对应任务管理器的「提交大小」。
+
+要看更完整的口径，用 WMI 性能类读取专用工作集：
+
+```powershell
+$p = Get-Process quick-paste
+Get-CimInstance Win32_PerfFormattedData_PerfProc_Process |
+  Where-Object IDProcess -eq $p.Id |
+  Select-Object Name,
+    @{n='WorkingSetMiB';e={[math]::Round($_.WorkingSet / 1MB, 1)}},
+    @{n='PrivateWSMiB';e={[math]::Round($_.WorkingSetPrivate / 1MB, 1)}},
+    @{n='CommitMiB';e={[math]::Round($_.PrivateBytes / 1MB, 1)}},
+    @{n='VirtualGiB';e={[math]::Round($_.VirtualBytes / 1GB, 2)}},
+    PageFaultsPerSec
+```
+
+- `WorkingSetMiB`：总工作集，当前驻留在物理内存里的页，含共享页。
+- `PrivateWSMiB`：专用工作集，真正属于本进程的常驻物理页。
+- `CommitMiB`：私有提交，进程已承诺的内存，可能在页面文件里。
+- `VirtualGiB`：保留的虚拟地址空间，不是实际物理内存。
+- `PageFaultsPerSec`：当前缺页速率，突然升高说明页面正在被调回。
+
+任务管理器进程页里的「内存」一般显示专用工作集；「详细信息」里右键列头选择
+「选择列」，可以加上「提交大小」「工作集」「专用工作集」对照。隐藏窗口
+10–30 秒后再测，工作集会下降，但私有提交不会变；重新打开窗口后工作集会
+逐渐涨回。
 
 ## 已知限制
 
