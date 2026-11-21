@@ -70,14 +70,26 @@ memos:
 cargo build --release
 ```
 
-产物位于 `target\release\quick-paste.exe`。
+原始产物位于 `target\release\quick-paste.exe`。
+
+需要 setup 安装包和 portable 便携包时：
+
+```powershell
+cargo install cargo-packager --version 0.11.8 --locked
+pwsh -File scripts/package.ps1 -Arch x64 -PackageType both
+```
+
+产物位于 `target\packages\x86_64-pc-windows-msvc\`：
+
+- `quick-paste_<版本>_x64-setup.exe`：NSIS 安装包
+- `quick-paste_<版本>_x64-portable.zip`：便携包（exe、VC 运行库、README、LICENSE）
 
 仓库自带 GitHub Actions 工作流（`.github/workflows/build.yml`），仅支持手动触发：
 
 - 在任意分支上手动运行：执行单元测试、构建发布版，校验 exe 使用 Windows GUI
-  子系统，并上传构建产物。
+  子系统，打包 setup 与 portable，并上传两个产物。
 - 手动运行并选择与 `Cargo.toml` 版本一致的 `v*` 标签：额外创建 GitHub Release，
-  上传包含 exe、README 和 LICENSE 的便携 ZIP。
+  上传 setup 和 portable 两个文件。
 
 ## 实现说明
 
@@ -90,6 +102,8 @@ src/
 ├── paste/platform.rs   前台窗口跟踪、Win32 显示隐藏、SendInput
 ├── single_instance.rs  文件锁单实例与唤回通知
 └── ui.rs               备忘录界面
+
+scripts/package.ps1     setup + portable 打包
 ```
 
 粘贴流程：后台线程每 120ms 记录一次“不属于本进程的前台窗口”。双击备忘录时，
