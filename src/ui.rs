@@ -1,24 +1,36 @@
-use std::path::PathBuf;
+mod smooth_scroll;
+
+use std::{path::PathBuf, rc::Rc};
 
 use gpui_kit::{
     AnyElement, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Pixels, Render,
+    ScrollEvent, SharedString, Size, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Window, div, point, px, size,
     component::{
-        ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _,
+        ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, VirtualListScrollHandle,
+        WindowExt as _,
         button::{Button, ButtonVariant, ButtonVariants},
         h_flex,
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
-        v_flex,
+        scroll::Scrollbar,
+        v_flex, v_virtual_list,
     },
     prelude::FluentBuilder as _,
 };
 
+use self::smooth_scroll::SmoothScroll;
 use crate::{app::HotkeyStatus, memo, paste};
+
+const ROW_HEIGHT: f32 = 92.0;
 
 pub struct MemoApp {
     data_path: PathBuf,
-    memos: Vec<String>,
+    memos: Vec<SharedString>,
+    filtered: Rc<Vec<usize>>,
+    row_sizes: Rc<Vec<Size<Pixels>>>,
+    list_scroll: VirtualListScrollHandle,
+    smooth_scroll: SmoothScroll,
     search: Entity<InputState>,
     filter: String,
     selected: Option<usize>,
@@ -49,12 +61,15 @@ impl MemoApp {
             |this, state, event, window, cx| match event {
                 InputEvent::Change => {
                     this.filter = state.read(cx).value().to_string();
+                    this.refresh_filter();
+                    this.scroll_to_top();
                     cx.notify();
                 }
                 InputEvent::PressEnter { .. } => {
                     this.filter = state.read(cx).value().to_string();
+                    this.refresh_filter();
                     if this.editor.is_none()
-                        && let Some(index) = this.filtered_indices().first().copied()
+                        && let Some(index) = this.filtered.first().copied()
                     {
                         this.paste_index(index, window, cx);
                     }
@@ -65,12 +80,20 @@ impl MemoApp {
 
         let mut notice = None;
         let memos = match memo::load_or_create(&data_path) {
-            Ok(memos) => memos,
+            Ok(memos) => memos
+                .into_iter()
+                .map(SharedString::from)
+                .collect::<Vec<_>>(),
             Err(error) => {
                 notice = Some(format!("无法读取备忘录：{error}").into());
                 Vec::new()
             }
         };
+        let filtered = Rc::new(memo::matching_indices(&memos, ""));
+        let row_sizes = Rc::new(vec![
+            size(px(0.0), px(ROW_HEIGHT));
+            filtered.len()
+        ]);
 
         window.on_window_should_close(cx, |window, _cx| {
             paste::hide_window(window);
@@ -80,6 +103,10 @@ impl MemoApp {
         let app = Self {
             data_path,
             memos,
+            filtered,
+            row_sizes,
+            list_scroll: VirtualListScrollHandle::new(),
+            smooth_scroll: SmoothScroll::default(),
             search,
             filter: String::new(),
             selected: None,
@@ -196,50 +223,74 @@ impl MemoApp {
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
-        let indices = self.filtered_indices();
-        let content = if self.memos.is_empty() {
-            render_empty_state(
-                IconName::FileText,
-                "还没有备忘录",
-                "点击「新建」添加一条纯文本，双击条目即可粘贴",
-                cx,
-            )
-        } else if indices.is_empty() {
-            render_empty_state(
-                IconName::Search,
-                "没有匹配的备忘录",
-                "换个关键词试试",
-                cx,
-            )
-        } else {
-            v_flex()
-                .w_full()
-                .p_2()
-                .gap_1()
-                .children(
-                    indices
-                        .into_iter()
-                        .map(|index| self.render_row(index, cx)),
+        if self.filtered.is_empty() {
+            let content = if self.memos.is_empty() {
+                render_empty_state(
+                    IconName::FileText,
+                    "还没有备忘录",
+                    "点击「新建」添加一条纯文本，双击条目即可粘贴",
+                    cx,
                 )
-                .into_any_element()
-        };
+            } else {
+                render_empty_state(
+                    IconName::Search,
+                    "没有匹配的备忘录",
+                    "换个关键词试试",
+                    cx,
+                )
+            };
+            return div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .child(content)
+                .into_any_element();
+        }
+
+        let filtered = self.filtered.clone();
+        let list = v_virtual_list(
+            cx.entity(),
+            "memo-list",
+            self.row_sizes.clone(),
+            move |this, range, _window, cx| {
+                range
+                    .filter_map(|index| {
+                        filtered
+                            .get(index)
+                            .copied()
+                            .map(|memo_index| this.render_row(memo_index, cx))
+                    })
+                    .collect::<Vec<_>>()
+            },
+        )
+        .track_scroll(&self.list_scroll)
+        .overflow_hidden()
+        .flex_1()
+        .min_h_0()
+        .w_full();
+
+        let scroll_size = size(px(0.0), px(ROW_HEIGHT * self.filtered.len() as f32));
 
         div()
-            .id("memo-list")
+            .id("memo-list-scroll")
+            .relative()
+            .flex()
+            .flex_col()
             .flex_1()
             .min_h_0()
             .w_full()
-            .overflow_y_scroll()
-            .child(content)
+            .overflow_hidden()
+            .on_scroll(cx.listener(Self::on_list_scroll))
+            .child(list)
+            .child(Scrollbar::vertical(&self.list_scroll).scroll_size(scroll_size))
             .into_any_element()
     }
 
     fn render_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(text) = self.memos.get(index) else {
+        let Some(text) = self.memos.get(index).cloned() else {
             return div().into_any_element();
         };
 
-        let text: SharedString = text.clone().into();
         let selected = self.selected == Some(index);
         let selected_bg = cx.theme().muted;
         let hover_bg = cx.theme().muted;
@@ -249,10 +300,13 @@ impl MemoApp {
         h_flex()
             .id(("memo-row", index))
             .w_full()
+            .h(px(ROW_HEIGHT))
             .items_start()
             .gap_3()
+            .overflow_hidden()
             .rounded_md()
-            .px_3()
+            .pl_3()
+            .pr_5()
             .py_3()
             .when(selected, |this| this.bg(selected_bg))
             .hover(move |this| this.bg(hover_bg))
@@ -278,7 +332,7 @@ impl MemoApp {
                             .child("双击粘贴"),
                     ),
             )
-            .child(
+            .children(selected.then(|| {
                 h_flex()
                     .gap_1()
                     .items_center()
@@ -289,7 +343,11 @@ impl MemoApp {
                             .label("编辑")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                let text = this.memos.get(index).cloned().unwrap_or_default();
+                                let text = this
+                                    .memos
+                                    .get(index)
+                                    .map(|text| text.to_string())
+                                    .unwrap_or_default();
                                 this.open_editor(Some(index), text, window, cx);
                             })),
                     )
@@ -303,8 +361,8 @@ impl MemoApp {
                                 cx.stop_propagation();
                                 this.confirm_delete(index, window, cx);
                             })),
-                    ),
-            )
+                    )
+            }))
             .into_any_element()
     }
 
@@ -382,6 +440,21 @@ impl MemoApp {
             .into_any_element()
     }
 
+    fn on_list_scroll(
+        &mut self,
+        event: &ScrollEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .smooth_scroll
+            .handle_wheel(&self.list_scroll, event, window)
+        {
+            cx.stop_propagation();
+            cx.notify();
+        }
+    }
+
     fn new_memo(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.open_editor(None, String::new(), window, cx);
     }
@@ -440,7 +513,7 @@ impl MemoApp {
         let mut next = self.memos.clone();
         let selected = match index {
             Some(index) if index < next.len() => {
-                next[index] = text;
+                next[index] = text.into();
                 index
             }
             Some(_) => {
@@ -450,17 +523,19 @@ impl MemoApp {
                 return;
             }
             None => {
-                next.insert(0, text);
+                next.insert(0, text.into());
                 0
             }
         };
 
-        match memo::save(&self.data_path, &next) {
+        let strings: Vec<String> = next.iter().map(|text| text.to_string()).collect();
+        match memo::save(&self.data_path, &strings) {
             Ok(()) => {
                 self.memos = next;
                 self.selected = Some(selected);
                 self.editor = None;
                 self.notice = None;
+                self.refresh_filter();
                 self.focus_search(window, cx);
             }
             Err(error) => {
@@ -481,11 +556,12 @@ impl MemoApp {
     fn reload(&mut self, cx: &mut Context<Self>) {
         match memo::load_or_create(&self.data_path) {
             Ok(memos) => {
-                self.memos = memos;
+                self.memos = memos.into_iter().map(SharedString::from).collect();
                 self.notice = None;
                 if self.selected.is_some_and(|index| index >= self.memos.len()) {
                     self.selected = None;
                 }
+                self.refresh_filter();
             }
             Err(error) => {
                 self.notice = Some(format!("重新加载失败：{error}").into());
@@ -510,7 +586,7 @@ impl MemoApp {
         let Some(text) = self.memos.get(index) else {
             return;
         };
-        let preview = preview_text(text, 80);
+        let preview = preview_text(text.as_ref(), 80);
         let entity = cx.entity();
 
         window.open_alert_dialog(cx, move |alert, _, _| {
@@ -536,7 +612,8 @@ impl MemoApp {
         let mut next = self.memos.clone();
         next.remove(index);
 
-        match memo::save(&self.data_path, &next) {
+        let strings: Vec<String> = next.iter().map(|text| text.to_string()).collect();
+        match memo::save(&self.data_path, &strings) {
             Ok(()) => {
                 self.memos = next;
                 self.notice = None;
@@ -559,6 +636,7 @@ impl MemoApp {
                 if close_editor {
                     self.editor = None;
                 }
+                self.refresh_filter();
             }
             Err(error) => {
                 self.notice = Some(format!("删除失败：{error}").into());
@@ -574,6 +652,7 @@ impl MemoApp {
         if text.trim().is_empty() {
             return;
         }
+        let text = text.to_string();
 
         cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
         let copied = cx
@@ -599,8 +678,19 @@ impl MemoApp {
         self.search.focus_handle(cx).focus(window, cx);
     }
 
-    fn filtered_indices(&self) -> Vec<usize> {
-        memo::matching_indices(&self.memos, &self.filter)
+    /// 重新计算过滤结果与行高缓存；备忘录或过滤词变化后必须调用。
+    fn refresh_filter(&mut self) {
+        self.smooth_scroll.reset();
+        self.filtered = Rc::new(memo::matching_indices(&self.memos, &self.filter));
+        self.row_sizes = Rc::new(vec![
+            size(px(0.0), px(ROW_HEIGHT));
+            self.filtered.len()
+        ]);
+    }
+
+    fn scroll_to_top(&mut self) {
+        self.smooth_scroll.reset();
+        self.list_scroll.set_offset(point(px(0.0), px(0.0)));
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -618,6 +708,8 @@ impl MemoApp {
                 self.filter.clear();
                 self.search
                     .update(cx, |state, cx| state.set_value("", window, cx));
+                self.refresh_filter();
+                self.scroll_to_top();
                 cx.notify();
             } else {
                 paste::hide_window(window);
@@ -651,7 +743,10 @@ impl Render for MemoApp {
         let query = self.search.read(cx).value().to_string();
         if query != self.filter {
             self.filter = query;
+            self.refresh_filter();
+            self.scroll_to_top();
         }
+        self.smooth_scroll.advance(&self.list_scroll, window);
 
         let toolbar = self.render_toolbar(cx);
         let editor = self

@@ -116,7 +116,7 @@ pub fn parse(content: &str) -> Result<Vec<String>, MemoError> {
 }
 
 /// 按忽略大小写的子串匹配，返回原列表中的下标。
-pub fn matching_indices(memos: &[String], query: &str) -> Vec<usize> {
+pub fn matching_indices<T: AsRef<str>>(memos: &[T], query: &str) -> Vec<usize> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
         return (0..memos.len()).collect();
@@ -125,8 +125,10 @@ pub fn matching_indices(memos: &[String], query: &str) -> Vec<usize> {
     memos
         .iter()
         .enumerate()
-        .filter(|(_, memo)| memo.to_lowercase().contains(&query))
-        .map(|(index, _)| index)
+        .filter_map(|(index, memo)| {
+            let memo: &str = memo.as_ref();
+            memo.to_lowercase().contains(&query).then_some(index)
+        })
         .collect()
 }
 
