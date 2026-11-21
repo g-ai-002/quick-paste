@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use gpui_kit::{
     AnyElement, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, Focusable as _,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
-    Styled as _, Subscription, Window, div,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
     component::{
-        ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
+        ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _,
         button::{Button, ButtonVariant, ButtonVariants},
         h_flex,
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
