@@ -130,6 +130,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      # 生成发布说明需要标签与完整提交历史。
+      - name: 📥 检出标签与完整历史
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: ⬇️ 下载构建产物
         uses: actions/download-artifact@v4
         with:
@@ -152,6 +160,27 @@ jobs:
           Write-Host '📊 待发布产物：'
           $assets | ForEach-Object { Write-Host "  - $($_.Name)" }
 
+      - name: 📝 生成发布说明
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_tag="$GITHUB_REF_NAME"
+          prev_tag="$(git tag --sort=-version:refname | grep -v "^${current_tag}$" | head -n 1 || true)"
+          if [ -n "$prev_tag" ]; then
+            echo "📌 上一个标签：$prev_tag"
+            git log --pretty=format:'* %s (%h)' "$prev_tag..$current_tag" \
+              -- . ':(exclude)docs' ':(exclude).github' ':(exclude).gitea' > release-notes.md
+            if [ ! -s release-notes.md ]; then
+              echo "本次发布没有需要列出的代码改动。" > release-notes.md
+            fi
+          else
+            echo "📌 未找到上一个标签，按首次发布处理"
+            echo "首次发布。" > release-notes.md
+          fi
+          printf '\n' >> release-notes.md
+          echo "=== 📝 生成的发布说明 ==="
+          cat release-notes.md
+
       - name: 🚀 创建并发布 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -168,7 +197,7 @@ jobs:
             throw "已存在 Release $tag，拒绝覆盖；如需重新发布请先删除该 Release"
           }
 
-          gh release create $tag --repo $repo --verify-tag --prerelease=$prerelease --title "快速粘贴 $tag" --generate-notes
+          gh release create $tag --repo $repo --verify-tag --prerelease=$prerelease --title "$tag" --notes-file release-notes.md
           if ($LASTEXITCODE -ne 0) { throw "创建 Release 失败，退出码：$LASTEXITCODE" }
 
           $uploadArgs = @('release', 'upload', $tag, '--repo', $repo) + @($assets.FullName)
