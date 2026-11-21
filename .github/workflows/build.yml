@@ -65,10 +65,13 @@ jobs:
         with:
           key: windows-x64
 
+      # Git Bash 的 /usr/bin/link 会遮蔽 MSVC 的 link.exe，Cargo 步骤必须用 pwsh。
       - name: 🧪 运行单元测试
+        shell: pwsh
         run: cargo test --release
 
       - name: 🔨 构建发布版
+        shell: pwsh
         run: cargo build --release
 
       - name: 🩺 验证发布程序不显示终端
