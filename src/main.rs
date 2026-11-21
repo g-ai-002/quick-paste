@@ -2,6 +2,7 @@
 
 mod app;
 mod memo;
+mod memory_trim;
 mod paste;
 mod single_instance;
 mod ui;

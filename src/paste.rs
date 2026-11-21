@@ -21,6 +21,9 @@ mod stub {
     pub fn hide_window(_window: &Window) {}
     pub fn hide_main_window() {}
     pub fn show_main_window() {}
+    pub fn is_main_window_visible() -> bool {
+        false
+    }
     pub fn is_main_window_foreground() -> bool {
         false
     }

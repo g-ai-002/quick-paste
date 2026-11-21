@@ -8,7 +8,7 @@ use std::{
 use gpui_kit::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::{
-    Foundation::HWND,
+    Foundation::{HWND, WPARAM},
     System::Threading::GetCurrentProcessId,
     UI::{
         Input::KeyboardAndMouse::{
@@ -16,8 +16,9 @@ use windows::Win32::{
             KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_V,
         },
         WindowsAndMessaging::{
-            GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow,
-            SetForegroundWindow, ShowWindowAsync, SW_HIDE, SW_RESTORE, SW_SHOW,
+            GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
+            SendMessageW, SetForegroundWindow, ShowWindowAsync, SW_HIDE, SW_RESTORE, SW_SHOW,
+            WM_SETREDRAW,
         },
     },
 };
@@ -51,6 +52,18 @@ pub fn set_main_window(hwnd: isize) {
     MAIN_WINDOW.store(hwnd, Ordering::Relaxed);
 }
 
+fn set_rendering_enabled(hwnd: isize, enabled: bool) {
+    // SAFETY: hwnd 是本进程记录的窗口句柄，WM_SETREDRAW 只切换该窗口的重绘标志。
+    unsafe {
+        let _ = SendMessageW(
+            HWND(hwnd as *mut c_void),
+            WM_SETREDRAW,
+            Some(WPARAM(if enabled { 1 } else { 0 })),
+            None,
+        );
+    }
+}
+
 pub fn hide_window(window: &Window) {
     let Some(hwnd) = window_hwnd(window) else {
         return;
@@ -59,6 +72,8 @@ pub fn hide_window(window: &Window) {
     unsafe {
         let _ = ShowWindowAsync(HWND(hwnd as *mut c_void), SW_HIDE);
     }
+    set_rendering_enabled(hwnd, false);
+    crate::memory_trim::schedule_hidden_trim();
 }
 
 pub fn hide_main_window() {
@@ -70,6 +85,8 @@ pub fn hide_main_window() {
     unsafe {
         let _ = ShowWindowAsync(HWND(hwnd as *mut c_void), SW_HIDE);
     }
+    set_rendering_enabled(hwnd, false);
+    crate::memory_trim::schedule_hidden_trim();
 }
 
 pub fn show_main_window() {
@@ -88,6 +105,8 @@ pub fn show_main_window() {
         let _ = ShowWindowAsync(handle, command);
         let _ = SetForegroundWindow(handle);
     }
+    set_rendering_enabled(hwnd, true);
+    crate::memory_trim::cancel_hidden_trim();
 }
 
 pub fn is_main_window_foreground() -> bool {
@@ -98,6 +117,15 @@ pub fn is_main_window_foreground() -> bool {
     // SAFETY: GetForegroundWindow 只读取当前前台窗口句柄。
     let foreground = unsafe { GetForegroundWindow() };
     foreground.0 as isize == main
+}
+
+pub fn is_main_window_visible() -> bool {
+    let main = MAIN_WINDOW.load(Ordering::Relaxed);
+    if main == 0 {
+        return false;
+    }
+    // SAFETY: hwnd 是本进程记录的窗口句柄，IsWindowVisible 只查询显示状态。
+    unsafe { IsWindowVisible(HWND(main as *mut c_void)).as_bool() }
 }
 
 /// 隐藏本窗口并把 Ctrl+V 发到刚才的前台窗口。没有可用目标时返回 `false`。

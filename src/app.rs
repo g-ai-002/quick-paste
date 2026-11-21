@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 
 use crate::{
-    memo, paste,
+    memo, memory_trim, paste,
     single_instance::SingleInstance,
     ui::MemoApp,
 };
@@ -112,6 +112,7 @@ pub fn run() {
             })
             .unwrap_or_else(|error| panic!("无法创建主窗口：{error}"));
 
+            memory_trim::schedule_startup_cleanup();
             spawn_hotkey_task(cx, view.clone(), hotkey_receiver);
             spawn_activation_task(cx, view, activation_receiver);
         });
