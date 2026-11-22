@@ -32,8 +32,10 @@ const ROW_MARGIN_X: f32 = 8.0;
 const ROW_PADDING_X: f32 = 12.0;
 const ROW_PADDING_Y: f32 = 12.0;
 const ROW_CONTENT_GAP: f32 = 4.0;
-const ROW_BORDER: f32 = 2.0;
 const ROW_GAP: f32 = 8.0;
+const PIN_SIZE: f32 = 24.0;
+const PIN_INSET: f32 = 6.0;
+const ROW_TEXT_RIGHT: f32 = PIN_SIZE + PIN_INSET + 6.0;
 
 pub struct MemoApp {
     source_path: PathBuf,
@@ -45,7 +47,7 @@ pub struct MemoApp {
     smooth_scroll: SmoothScroll,
     search: Entity<InputState>,
     filter: String,
-    selected: Option<usize>,
+    hovered: Option<usize>,
     notice: Option<SharedString>,
     hotkey: HotkeyStatus,
     _subscriptions: Vec<Subscription>,
@@ -113,7 +115,7 @@ impl MemoApp {
             smooth_scroll: SmoothScroll::default(),
             search,
             filter: String::new(),
-            selected: None,
+            hovered: None,
             notice,
             hotkey,
             _subscriptions: vec![subscription],
@@ -254,10 +256,10 @@ impl MemoApp {
         let row_height = Self::row_height(memo);
         let card_height = row_height - ROW_GAP;
 
-        let selected = self.selected == Some(index);
+        let hovered = self.hovered == Some(index);
         let card_bg = cx.theme().background;
-        let hover_border = cx.theme().border;
         let primary = cx.theme().primary;
+        let pin_hover_bg = cx.theme().muted;
         let muted_foreground = cx.theme().muted_foreground;
 
         v_flex()
@@ -275,71 +277,79 @@ impl MemoApp {
                     .gap(px(ROW_CONTENT_GAP))
                     .overflow_hidden()
                     .rounded_md()
-                    .border_1()
-                    .border_color(card_bg)
                     .bg(card_bg)
                     .px(px(ROW_PADDING_X))
                     .py(px(ROW_PADDING_Y))
-                    .hover(move |this| {
-                        if selected {
-                            this
-                        } else {
-                            this.border_color(hover_border)
+                    .hover(|this| this.shadow_sm())
+                    .on_hover(cx.listener(move |this, is_hovered: &bool, _window, cx| {
+                        if *is_hovered {
+                            if this.hovered != Some(index) {
+                                this.hovered = Some(index);
+                                cx.notify();
+                            }
+                        } else if this.hovered == Some(index) {
+                            this.hovered = None;
+                            cx.notify();
                         }
-                    })
-                    .when(selected, |this| this.border_color(primary))
+                    }))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         if event.click_count() == 2 {
                             this.paste_index(index, window, cx);
-                        } else {
-                            this.selected = Some(index);
-                            cx.notify();
                         }
                     }))
                     .child(
                         div()
                             .w_full()
-                            .line_clamp(line_count)
+                            .flex_shrink_0()
+                            .h(px(line_count as f32 * ROW_LINE_HEIGHT))
+                            .overflow_hidden()
+                            .pr(px(ROW_TEXT_RIGHT))
                             .text_sm()
                             .line_height(px(ROW_LINE_HEIGHT))
-                            .when(selected || pinned, |this| this.pr(px(36.0)))
+                            .line_clamp(line_count)
                             .child(text),
                     )
                     .children(tags.map(|tags| {
                         div()
                             .w_full()
+                            .flex_shrink_0()
+                            .h(px(ROW_TAG_HEIGHT))
                             .truncate()
                             .text_xs()
                             .line_height(px(ROW_TAG_HEIGHT))
                             .text_color(muted_foreground)
                             .child(tags)
                     }))
-                    .children((selected || pinned).then(|| {
-                        if selected {
-                            div().absolute().top(px(6.0)).right(px(6.0)).child(
-                                Button::new(("memo-pin", index))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(if pinned {
-                                        IconName::StarFill
-                                    } else {
-                                        IconName::Star
-                                    })
-                                    .text_color(primary)
-                                    .tooltip(if pinned { "取消置顶" } else { "置顶" })
+                    .children((pinned || hovered).then(|| {
+                        div()
+                            .id(("memo-pin", index))
+                            .absolute()
+                            .top(px(PIN_INSET))
+                            .right(px(PIN_INSET))
+                            .w(px(PIN_SIZE))
+                            .h(px(PIN_SIZE))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .when(hovered, |this| {
+                                this.hover(move |this| this.bg(pin_hover_bg))
+                                    .cursor_pointer()
                                     .on_click(cx.listener(move |this, _, _window, cx| {
                                         cx.stop_propagation();
                                         this.toggle_pin(index, cx);
-                                    })),
+                                    }))
+                            })
+                            .child(
+                                Icon::new(if pinned {
+                                    IconName::StarFill
+                                } else {
+                                    IconName::Star
+                                })
+                                .small()
+                                .text_color(primary),
                             )
-                        } else {
-                            div()
-                                .absolute()
-                                .top(px(10.0))
-                                .right(px(10.0))
-                                .child(Icon::new(IconName::StarFill).small().text_color(primary))
-                        }
                     })),
             )
             .into_any_element()
@@ -441,15 +451,9 @@ impl MemoApp {
     fn reload(&mut self, cx: &mut Context<Self>) {
         match Self::load_merged(&self.source_path, &self.data_path) {
             Ok(memos) => {
-                let selected_text = self
-                    .selected
-                    .and_then(|index| self.memos.get(index))
-                    .map(|memo| memo.text.clone());
                 let save_error = memo::save(&self.data_path, &memos).err();
 
                 self.memos = memos;
-                self.selected = selected_text
-                    .and_then(|text| self.memos.iter().position(|memo| memo.text == text));
                 self.notice = save_error.map(|error| {
                     SharedString::from(format!("已重新加载，但写入本地状态失败：{error}"))
                 });
@@ -473,7 +477,6 @@ impl MemoApp {
         let Some(memo) = self.memos.get(index) else {
             return;
         };
-        let text = memo.text.clone();
         let pinned = !memo.is_pinned;
 
         let mut next = self.memos.clone();
@@ -483,7 +486,6 @@ impl MemoApp {
         match memo::save(&self.data_path, &next) {
             Ok(()) => {
                 self.memos = next;
-                self.selected = self.memos.iter().position(|memo| memo.text == text);
                 self.notice = None;
                 self.refresh_filter();
                 if pinned {
@@ -532,10 +534,9 @@ impl MemoApp {
     }
 
     fn record_usage(&mut self, index: usize) -> Result<(), memo::MemoError> {
-        let Some(memo) = self.memos.get(index) else {
+        if self.memos.get(index).is_none() {
             return Ok(());
-        };
-        let text = memo.text.clone();
+        }
 
         let mut next = self.memos.clone();
         next[index].usage_count = next[index].usage_count.saturating_add(1);
@@ -543,7 +544,6 @@ impl MemoApp {
         memo::save(&self.data_path, &next)?;
 
         self.memos = next;
-        self.selected = self.memos.iter().position(|memo| memo.text == text);
         self.refresh_filter();
         Ok(())
     }
@@ -555,6 +555,7 @@ impl MemoApp {
     /// 重新计算过滤结果与行高缓存；备忘录或过滤词变化后必须调用。
     fn refresh_filter(&mut self) {
         self.smooth_scroll.reset();
+        self.hovered = None;
         let filtered = memo::matching_indices(&self.memos, &self.filter);
         self.row_sizes = Rc::new(Self::compute_row_sizes(&self.memos, filtered.as_slice()));
         self.filtered = Rc::new(filtered);
@@ -621,7 +622,7 @@ impl MemoApp {
         } else {
             ROW_CONTENT_GAP + ROW_TAG_HEIGHT
         };
-        ROW_PADDING_Y * 2.0 + lines * ROW_LINE_HEIGHT + tags + ROW_BORDER + ROW_GAP
+        ROW_PADDING_Y * 2.0 + lines * ROW_LINE_HEIGHT + tags + ROW_GAP
     }
 }
 
