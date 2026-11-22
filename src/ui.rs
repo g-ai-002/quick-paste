@@ -28,6 +28,8 @@ use crate::{app::HotkeyStatus, memo, paste};
 const MAX_TEXT_LINES: usize = 3;
 const ROW_LINE_HEIGHT: f32 = 22.0;
 const ROW_TAG_HEIGHT: f32 = 20.0;
+const ROW_MARGIN_X: f32 = 8.0;
+const ROW_PADDING_X: f32 = 12.0;
 const ROW_PADDING_Y: f32 = 12.0;
 const ROW_CONTENT_GAP: f32 = 4.0;
 const ROW_BORDER: f32 = 2.0;
@@ -253,33 +255,39 @@ impl MemoApp {
         let card_height = row_height - ROW_GAP;
 
         let selected = self.selected == Some(index);
-        let selected_bg = cx.theme().muted;
-        let hover_bg = cx.theme().muted;
-        let border = cx.theme().border;
+        let card_bg = cx.theme().background;
+        let hover_border = cx.theme().border;
+        let primary = cx.theme().primary;
         let muted_foreground = cx.theme().muted_foreground;
 
         v_flex()
             .id(("memo-row", index))
             .w_full()
             .h(px(row_height))
-            .px_2()
-            .pb_2()
+            .px(px(ROW_MARGIN_X))
+            .pb(px(ROW_GAP))
             .child(
                 v_flex()
                     .id(("memo-card", index))
                     .relative()
                     .w_full()
                     .h(px(card_height))
-                    .gap_1()
+                    .gap(px(ROW_CONTENT_GAP))
                     .overflow_hidden()
                     .rounded_md()
                     .border_1()
-                    .border_color(border)
-                    .bg(cx.theme().background)
-                    .px_3()
-                    .py_3()
-                    .when(selected, |this| this.bg(selected_bg))
-                    .hover(move |this| this.bg(hover_bg))
+                    .border_color(card_bg)
+                    .bg(card_bg)
+                    .px(px(ROW_PADDING_X))
+                    .py(px(ROW_PADDING_Y))
+                    .hover(move |this| {
+                        if selected {
+                            this
+                        } else {
+                            this.border_color(hover_border)
+                        }
+                    })
+                    .when(selected, |this| this.border_color(primary))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         if event.click_count() == 2 {
@@ -294,7 +302,8 @@ impl MemoApp {
                             .w_full()
                             .line_clamp(line_count)
                             .text_sm()
-                            .when(selected, |this| this.pr(px(80.0)))
+                            .line_height(px(ROW_LINE_HEIGHT))
+                            .when(selected || pinned, |this| this.pr(px(36.0)))
                             .child(text),
                     )
                     .children(tags.map(|tags| {
@@ -302,21 +311,35 @@ impl MemoApp {
                             .w_full()
                             .truncate()
                             .text_xs()
+                            .line_height(px(ROW_TAG_HEIGHT))
                             .text_color(muted_foreground)
-                            .when(selected, |this| this.pr(px(80.0)))
                             .child(tags)
                     }))
-                    .children(selected.then(|| {
-                        div().absolute().top(px(8.0)).right(px(8.0)).child(
-                            Button::new(("memo-pin", index))
-                                .ghost()
-                                .xsmall()
-                                .label(if pinned { "取消置顶" } else { "置顶" })
-                                .on_click(cx.listener(move |this, _, _window, cx| {
-                                    cx.stop_propagation();
-                                    this.toggle_pin(index, cx);
-                                })),
-                        )
+                    .children((selected || pinned).then(|| {
+                        if selected {
+                            div().absolute().top(px(6.0)).right(px(6.0)).child(
+                                Button::new(("memo-pin", index))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(if pinned {
+                                        IconName::StarFill
+                                    } else {
+                                        IconName::Star
+                                    })
+                                    .text_color(primary)
+                                    .tooltip(if pinned { "取消置顶" } else { "置顶" })
+                                    .on_click(cx.listener(move |this, _, _window, cx| {
+                                        cx.stop_propagation();
+                                        this.toggle_pin(index, cx);
+                                    })),
+                            )
+                        } else {
+                            div()
+                                .absolute()
+                                .top(px(10.0))
+                                .right(px(10.0))
+                                .child(Icon::new(IconName::StarFill).small().text_color(primary))
+                        }
                     })),
             )
             .into_any_element()
@@ -624,7 +647,7 @@ impl Render for MemoApp {
         v_flex()
             .id("memo-app")
             .size_full()
-            .bg(cx.theme().background)
+            .bg(cx.theme().muted)
             .text_color(cx.theme().foreground)
             .child(toolbar)
             .child(list)
