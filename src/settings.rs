@@ -116,7 +116,7 @@ impl Default for Settings {
             click_action: ClickAction::DoubleClick,
             paste_action: PasteAction::AutoPaste,
             track_usage: true,
-            clear_search_after_paste: false,
+            clear_search_after_paste: true,
             enter_pastes_first: true,
         }
     }
@@ -238,6 +238,7 @@ mod tests {
         assert_eq!(settings.max_text_lines, 3);
         assert_eq!(settings.theme, ThemeChoice::System);
         assert_eq!(settings.hotkey, HotkeyChoice::CtrlShiftX);
+        assert!(settings.clear_search_after_paste);
     }
 
     #[test]
