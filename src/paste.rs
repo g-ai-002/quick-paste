@@ -21,6 +21,8 @@ mod stub {
     pub fn move_main_window_to_cursor_display() -> bool {
         false
     }
+    pub fn show_preview_window(_hwnd: isize, _x: i32, _y: i32, _width: i32, _height: i32) {}
+    pub fn hide_preview_window(_hwnd: isize) {}
     pub fn hide_window(_window: &Window) {}
     pub fn hide_main_window() {}
     pub fn show_main_window() {}

@@ -140,7 +140,7 @@ const SETTING_META: &[SettingMeta] = &[
         id: "hover_preview",
         page: SettingsPage::Preview,
         title: "悬停预览完整内容",
-        description: "鼠标停在未完整显示的卡片上时，弹出完整文本、标签与使用次数。",
+        description: "鼠标停在未完整显示的卡片上时，在卡片右侧弹出完整文本、标签与使用次数。",
         keywords: &["悬停", "预览", "完整"],
     },
     SettingMeta {

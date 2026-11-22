@@ -7,16 +7,15 @@ use std::{
 };
 
 use gpui_kit::{
-    Anchor, AnyElement, App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity,
+    AnyElement, App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity,
     Focusable as _, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    Pixels, Render, ScrollEvent, SharedString, Size, StatefulInteractiveElement as _, Styled as _,
-    StyleRefinement, Subscription, Window, div, point, px, size,
+    Pixels, PlatformDisplay as _, Render, ScrollEvent, SharedString, Size,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, point, px, size,
     component::{
         ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
         VirtualListScrollHandle, WindowExt as _,
         button::{Button, ButtonVariants},
         h_flex,
-        hover_card::HoverCard,
         input::{Input, InputEvent, InputState},
         scroll::Scrollbar,
         v_flex, v_virtual_list,
@@ -25,7 +24,7 @@ use gpui_kit::{
 };
 
 use self::smooth_scroll::SmoothScroll;
-use crate::{hotkey, memo, paste, settings, settings_window};
+use crate::{hotkey, memo, paste, preview, settings, settings_window};
 
 const ROW_LINE_HEIGHT: f32 = 22.0;
 const ROW_TAG_HEIGHT: f32 = 20.0;
@@ -53,6 +52,7 @@ pub struct MemoApp {
     notice: Option<SharedString>,
     window_active: bool,
     suppress_blur_until: Option<Instant>,
+    preview_generation: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -110,7 +110,8 @@ impl MemoApp {
             &app_settings,
         ));
 
-        window.on_window_should_close(cx, |window, _cx| {
+        window.on_window_should_close(cx, |window, cx| {
+            preview::hide(cx);
             paste::hide_window(window);
             false
         });
@@ -120,6 +121,7 @@ impl MemoApp {
             let was_active = this.window_active;
             this.window_active = active;
             if was_active && !active {
+                this.cancel_preview(cx);
                 let suppress = this
                     .suppress_blur_until
                     .is_some_and(|until| Instant::now() < until);
@@ -127,6 +129,7 @@ impl MemoApp {
                     this.suppress_blur_until = None;
                     this.window_active = true;
                 } else if this.settings.auto_hide_on_blur {
+                    this.cancel_preview(cx);
                     paste::hide_window(window);
                 }
             }
@@ -153,6 +156,7 @@ impl MemoApp {
             notice,
             window_active: window.is_window_active(),
             suppress_blur_until: None,
+            preview_generation: 0,
             _subscriptions: vec![
                 subscription,
                 activation_subscription,
@@ -161,9 +165,6 @@ impl MemoApp {
         };
         if let Some(hwnd) = paste::window_hwnd(window) {
             paste::set_main_window(hwnd);
-            if app.settings.show_on_cursor_display {
-                paste::move_main_window_to_cursor_display();
-            }
         }
         app.search.focus_handle(cx).focus(window, cx);
         app
@@ -172,6 +173,7 @@ impl MemoApp {
     pub fn on_hotkey(&mut self, cx: &mut Context<Self>) {
         if paste::is_main_window_foreground() {
             self.window_active = false;
+            self.cancel_preview(cx);
             paste::hide_main_window();
         } else {
             self.on_show_request(cx);
@@ -179,18 +181,151 @@ impl MemoApp {
     }
 
     pub fn on_show_request(&mut self, cx: &mut Context<Self>) {
+        self.cancel_preview(cx);
         self.sync_settings(cx);
         if self.settings.theme == settings::ThemeChoice::System {
             gpui_kit::component::Theme::sync_system_appearance(None, cx);
         }
         if self.settings.show_on_cursor_display {
-            paste::move_main_window_to_cursor_display();
+            Self::schedule_show_on_cursor_display(cx);
+        } else {
+            paste::show_main_window();
         }
-        paste::show_main_window();
         self.window_active = true;
         self.suppress_blur_until = None;
         self.reload(cx);
         cx.notify();
+    }
+
+    fn schedule_show_on_cursor_display(cx: &mut Context<Self>) {
+        cx.spawn(async move |_this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(1))
+                .await;
+            paste::move_main_window_to_cursor_display();
+            paste::show_main_window();
+        })
+        .detach();
+    }
+
+    fn schedule_preview(&mut self, index: usize, window: &Window, cx: &mut Context<Self>) {
+        // 换到另一张卡片时先收起旧预览，避免旧内容在延迟期间继续停留。
+        self.cancel_preview(cx);
+        let Some(memo) = self.memos.get(index) else {
+            return;
+        };
+        let text = SharedString::from(memo.text.clone());
+        let tags = if memo.tags.is_empty() {
+            None
+        } else {
+            Some(SharedString::from(
+                memo.tags
+                    .iter()
+                    .map(|tag| format!("#{tag}"))
+                    .collect::<Vec<_>>()
+                    .join("  "),
+            ))
+        };
+        let tags_truncated = tags.as_ref().is_some_and(|tags| {
+            tags.as_ref()
+                .chars()
+                .map(|ch| if ch.is_ascii() { 1 } else { 2 })
+                .sum::<usize>()
+                > 60
+        });
+        let truncated = memo::is_truncated(text.as_ref(), self.settings.max_text_lines);
+        if !self.settings.hover_preview || !(truncated || tags_truncated) {
+            self.cancel_preview(cx);
+            return;
+        }
+        let Some((x, y, width, height)) = self.preview_physical_bounds(window, cx) else {
+            self.cancel_preview(cx);
+            return;
+        };
+
+        let content = preview::PreviewContent {
+            text,
+            tags,
+            usage_count: memo.usage_count,
+            pinned: memo.is_pinned,
+        };
+        let delay = self.settings.hover_preview_delay_ms;
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        let generation = self.preview_generation;
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(delay))
+                .await;
+            let hwnd = weak
+                .update(cx, |this, cx| {
+                    if this.preview_generation != generation
+                        || this.hovered != Some(index)
+                        || this.smooth_scroll.is_active()
+                    {
+                        return None;
+                    }
+                    preview::prepare(content, cx)
+                })
+                .ok()
+                .flatten();
+            if let Some(hwnd) = hwnd {
+                preview::show_window(hwnd, x, y, width, height);
+            }
+        })
+        .detach();
+    }
+
+    fn cancel_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        preview::hide(cx);
+    }
+
+    fn preview_physical_bounds(
+        &self,
+        window: &Window,
+        cx: &App,
+    ) -> Option<(i32, i32, i32, i32)> {
+        let main = window.bounds();
+        let center = main.center();
+        let displays = cx.displays();
+        let display = displays
+            .iter()
+            .find(|display| display.bounds().contains(&center))
+            .cloned()
+            .or_else(|| displays.first().cloned())?;
+        let work = display.visible_bounds();
+        let gap = px(8.0);
+        let (width, height) = preview::window_size();
+        let width = px(width)
+            .min(work.size.width - gap * 2.0)
+            .max(px(160.0));
+        let height = px(height)
+            .min(work.size.height - gap * 2.0)
+            .max(px(120.0));
+        let work_left = work.origin.x;
+        let work_top = work.origin.y;
+        let work_right = work_left + work.size.width;
+        let work_bottom = work_top + work.size.height;
+
+        let mut x = main.origin.x + main.size.width + gap;
+        if x + width > work_right {
+            x = main.origin.x - gap - width;
+        }
+        let max_x = (work_right - width - gap).max(work_left + gap);
+        let x = x.max(work_left + gap).min(max_x);
+        let max_y = (work_bottom - height - gap).max(work_top + gap);
+        let y = (main.origin.y + gap)
+            .max(work_top + gap)
+            .min(max_y);
+
+        let scale = display.scale_factor();
+        Some((
+            (f32::from(x) * scale).round() as i32,
+            (f32::from(y) * scale).round() as i32,
+            (f32::from(width) * scale).round() as i32,
+            (f32::from(height) * scale).round() as i32,
+        ))
     }
 
     fn sync_settings(&mut self, cx: &App) {
@@ -303,7 +438,6 @@ impl MemoApp {
         };
 
         let text = SharedString::from(memo.text.clone());
-        let preview_text = text.clone();
         let tags: Option<SharedString> = if memo.tags.is_empty() {
             None
         } else {
@@ -315,19 +449,9 @@ impl MemoApp {
                     .join("  "),
             ))
         };
-        let preview_tags = tags.clone();
         let max_lines = self.settings.max_text_lines;
         let line_count = memo::display_line_count(text.as_ref(), max_lines);
-        let truncated = memo::is_truncated(text.as_ref(), max_lines);
-        let tags_truncated = tags.as_ref().is_some_and(|tags| {
-            tags.as_ref()
-                .chars()
-                .map(|ch| if ch.is_ascii() { 1 } else { 2 })
-                .sum::<usize>()
-                > 60
-        });
         let pinned = memo.is_pinned;
-        let usage_count = memo.usage_count;
         let row_height = Self::row_height(memo, &self.settings);
         let card_height = row_height - ROW_GAP;
         let card_radius = self.settings.card_radius;
@@ -352,7 +476,7 @@ impl MemoApp {
             .px(px(ROW_PADDING_X))
             .py(px(ROW_PADDING_Y))
             .when(hovered, |this| this.shadow_sm())
-            .on_hover(cx.listener(move |this, is_hovered: &bool, _window, cx| {
+            .on_hover(cx.listener(move |this, is_hovered: &bool, window, cx| {
                 let next = if *is_hovered {
                     Some(index)
                 } else if this.hovered == Some(index) {
@@ -362,6 +486,13 @@ impl MemoApp {
                 };
                 if this.hovered != next {
                     this.hovered = next;
+                    if this.smooth_scroll.is_active() {
+                        this.cancel_preview(cx);
+                    } else if next.is_some() {
+                        this.schedule_preview(index, window, cx);
+                    } else {
+                        this.cancel_preview(cx);
+                    }
                     if !this.smooth_scroll.is_active() {
                         cx.notify();
                     }
@@ -431,74 +562,13 @@ impl MemoApp {
                     )
             }));
 
-        let content = if self.settings.hover_preview
-            && (truncated || tags_truncated)
-            && !scrolling
-        {
-            let popover_bg = cx.theme().popover;
-            let popover_foreground = cx.theme().popover_foreground;
-            let border = cx.theme().border;
-            let preview = v_flex()
-                .id(SharedString::from(format!("memo-preview-{index}")))
-                .w(px(380.0))
-                .max_h(px(420.0))
-                .gap_2()
-                .rounded(px(10.0))
-                .border_1()
-                .border_color(border)
-                .bg(popover_bg)
-                .text_color(popover_foreground)
-                .shadow_lg()
-                .p_3()
-                .child(
-                    div()
-                        .id(SharedString::from(format!("memo-preview-text-{index}")))
-                        .max_h(px(300.0))
-                        .overflow_y_scroll()
-                        .text_sm()
-                        .line_height(px(20.0))
-                        .child(preview_text),
-                )
-                .children(preview_tags.map(|tags| {
-                    div()
-                        .id(SharedString::from(format!("memo-preview-tags-{index}")))
-                        .max_h(px(56.0))
-                        .overflow_y_scroll()
-                        .text_xs()
-                        .text_color(muted_foreground)
-                        .child(tags)
-                }))
-                .child(
-                    h_flex()
-                        .gap_3()
-                        .text_xs()
-                        .text_color(muted_foreground)
-                        .child(format!("使用 {usage_count} 次"))
-                        .children(pinned.then(|| div().child("已置顶"))),
-                );
-
-            HoverCard::new(("memo-hover-preview", index))
-                .appearance(false)
-                .anchor(Anchor::TopLeft)
-                .open_delay(Duration::from_millis(
-                    self.settings.hover_preview_delay_ms,
-                ))
-                .close_delay(Duration::from_millis(120))
-                .trigger_style(StyleRefinement::default().w_full())
-                .trigger(card)
-                .child(preview)
-                .into_any_element()
-        } else {
-            card.into_any_element()
-        };
-
         v_flex()
             .id(("memo-row", index))
             .w_full()
             .h(px(row_height))
             .px(px(ROW_MARGIN_X))
             .pb(px(ROW_GAP))
-            .child(content)
+            .child(card)
             .into_any_element()
     }
 
@@ -595,6 +665,7 @@ impl MemoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_preview(cx);
         if !self.settings.smooth_scroll {
             self.smooth_scroll.reset();
             let mut delta = event.delta.pixel_delta(window.line_height());
@@ -700,6 +771,7 @@ impl MemoApp {
         if text.trim().is_empty() {
             return;
         }
+        self.cancel_preview(cx);
         let track_usage = self.settings.track_usage;
         let paste_action = self.settings.paste_action;
         let clear_search = self.settings.clear_search_after_paste;

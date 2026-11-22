@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 
 use crate::{
-    hotkey, memo, memory_trim, paste, settings, settings_window,
+    hotkey, memo, memory_trim, paste, preview, settings, settings_window,
     single_instance::SingleInstance,
     ui::MemoApp,
 };
@@ -83,6 +83,7 @@ pub fn run() {
     let source_path = paths.source.clone();
     let memos_path = paths.memos.clone();
     let settings_path = paths.settings.clone();
+    let crash_log_path = paths.crash_log.clone();
 
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
@@ -107,6 +108,9 @@ pub fn run() {
             })
             .unwrap_or_else(|error| panic!("无法创建主窗口：{error}"));
 
+            if let Err(error) = preview::install(cx) {
+                append_log(&crash_log_path, &format!("创建预览窗口失败：{error}"));
+            }
             memory_trim::schedule_startup_cleanup();
             if initial_settings.start_hidden {
                 paste::hide_main_window();

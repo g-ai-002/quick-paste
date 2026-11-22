@@ -5,6 +5,7 @@ mod hotkey;
 mod memo;
 mod memory_trim;
 mod paste;
+mod preview;
 mod settings;
 mod settings_window;
 mod single_instance;

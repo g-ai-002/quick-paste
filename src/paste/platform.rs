@@ -23,6 +23,7 @@ use windows::Win32::{
             GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsIconic,
             IsWindow, IsWindowVisible, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
             SetForegroundWindow, SetWindowPos, ShowWindowAsync, SW_HIDE, SW_RESTORE, SW_SHOW,
+            SW_SHOWNOACTIVATE,
         },
     },
 };
@@ -106,6 +107,36 @@ pub fn move_main_window_to_cursor_display() -> bool {
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         )
         .is_ok()
+    }
+}
+
+pub fn show_preview_window(hwnd: isize, x: i32, y: i32, width: i32, height: i32) {
+    if hwnd == 0 {
+        return;
+    }
+    let handle = HWND(hwnd as *mut c_void);
+    // SAFETY: hwnd 是本进程创建的预览窗口；只移动尺寸并以不激活方式显示。
+    unsafe {
+        let _ = SetWindowPos(
+            handle,
+            None,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+        let _ = ShowWindowAsync(handle, SW_SHOWNOACTIVATE);
+    }
+}
+
+pub fn hide_preview_window(hwnd: isize) {
+    if hwnd == 0 {
+        return;
+    }
+    // SAFETY: hwnd 是本进程创建的预览窗口。
+    unsafe {
+        let _ = ShowWindowAsync(HWND(hwnd as *mut c_void), SW_HIDE);
     }
 }
 
