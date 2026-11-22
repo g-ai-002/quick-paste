@@ -7,7 +7,7 @@ use gpui_kit::{
     App, AppContext as _, Bounds, Context, Entity, Global, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point, px, size,
-    component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex},
+    component::{ActiveTheme as _, h_flex, v_flex},
 };
 
 use crate::paste;

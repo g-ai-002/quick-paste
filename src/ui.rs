@@ -9,7 +9,7 @@ use std::{
 use gpui_kit::{
     AnyElement, App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity,
     Focusable as _, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    Pixels, PlatformDisplay as _, Render, ScrollEvent, SharedString, Size,
+    Pixels, Render, ScrollEvent, SharedString, Size,
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, point, px, size,
     component::{
         ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
@@ -319,7 +319,7 @@ impl MemoApp {
             .max(work_top + gap)
             .min(max_y);
 
-        let scale = display.scale_factor();
+        let scale = window.scale_factor();
         Some((
             (f32::from(x) * scale).round() as i32,
             (f32::from(y) * scale).round() as i32,
