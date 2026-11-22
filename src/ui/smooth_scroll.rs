@@ -45,6 +45,10 @@ impl SmoothScroll {
         self.frame_scheduled = false;
     }
 
+    pub(crate) fn is_active(&self) -> bool {
+        self.animation.is_some() || self.touch_gesture_active
+    }
+
     pub(crate) fn handle_wheel(
         &mut self,
         scroll_handle: &VirtualListScrollHandle,

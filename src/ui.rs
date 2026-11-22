@@ -256,7 +256,8 @@ impl MemoApp {
         let row_height = Self::row_height(memo);
         let card_height = row_height - ROW_GAP;
 
-        let hovered = self.hovered == Some(index);
+        let scrolling = self.smooth_scroll.is_active();
+        let hovered = !scrolling && self.hovered == Some(index);
         let card_bg = cx.theme().background;
         let primary = cx.theme().primary;
         let pin_hover_bg = cx.theme().muted;
@@ -280,16 +281,20 @@ impl MemoApp {
                     .bg(card_bg)
                     .px(px(ROW_PADDING_X))
                     .py(px(ROW_PADDING_Y))
-                    .hover(|this| this.shadow_sm())
+                    .when(hovered, |this| this.shadow_sm())
                     .on_hover(cx.listener(move |this, is_hovered: &bool, _window, cx| {
-                        if *is_hovered {
-                            if this.hovered != Some(index) {
-                                this.hovered = Some(index);
+                        let next = if *is_hovered {
+                            Some(index)
+                        } else if this.hovered == Some(index) {
+                            None
+                        } else {
+                            return;
+                        };
+                        if this.hovered != next {
+                            this.hovered = next;
+                            if !this.smooth_scroll.is_active() {
                                 cx.notify();
                             }
-                        } else if this.hovered == Some(index) {
-                            this.hovered = None;
-                            cx.notify();
                         }
                     }))
                     .cursor_pointer()
@@ -435,11 +440,14 @@ impl MemoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let was_scrolling = self.smooth_scroll.is_active();
         if self
             .smooth_scroll
             .handle_wheel(&self.list_scroll, event, window)
         {
             cx.stop_propagation();
+            cx.notify();
+        } else if was_scrolling && !self.smooth_scroll.is_active() {
             cx.notify();
         }
     }
