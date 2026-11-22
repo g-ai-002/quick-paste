@@ -266,7 +266,7 @@ mod tests {
             max_text_lines: 5,
             theme: ThemeChoice::Dark,
             card_radius: 10.0,
-            hotkey: HotkeyChoice::CtrlAltV,
+            hotkey: HotkeyChoice::Custom("ctrl+alt+c".into()),
             click_action: ClickAction::SingleClick,
             paste_action: PasteAction::CopyOnly,
             track_usage: false,

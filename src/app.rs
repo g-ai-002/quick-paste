@@ -93,7 +93,7 @@ pub fn run() {
             settings_window::install(cx);
             cx.set_global(InstanceGuard(instance));
 
-            let hotkey_receiver = hotkey::install(cx, initial_settings.hotkey);
+            let hotkey_receiver = hotkey::install(cx, initial_settings.hotkey.clone());
             let options = window_options(cx);
             let (_, view) = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| {

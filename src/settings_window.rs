@@ -6,8 +6,8 @@ use std::{
 };
 
 use gpui_kit::{
-    AnyElement, AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, Context, Entity,
-    Focusable as _,
+    AnyElement, AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, ClickEvent, Context,
+    Entity, FocusHandle, Focusable,
     Global, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions,
     Window, WindowBounds, WindowOptions, div, px, size,
@@ -182,8 +182,8 @@ const SETTING_META: &[SettingMeta] = &[
         id: "hotkey",
         page: SettingsPage::Shortcuts,
         title: "唤出快捷键",
-        description: "全局显示 / 隐藏窗口的快捷键，修改后立即生效。",
-        keywords: &["全局", "热键", "快捷键"],
+        description: "点击“录制”后按下组合键，修改后立即生效。",
+        keywords: &["全局", "热键", "快捷键", "自定义", "录制"],
     },
     SettingMeta {
         id: "fixed_shortcuts",
@@ -388,6 +388,8 @@ struct SettingsWindow {
     query: String,
     highlight: Option<&'static str>,
     notice: Option<SharedString>,
+    recording_hotkey: bool,
+    focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -424,6 +426,14 @@ impl SettingsWindow {
                 }
             });
 
+        let focus_handle = cx.focus_handle();
+        let blur_subscription = cx.on_blur(&focus_handle, window, |this, _window, cx| {
+            if this.recording_hotkey {
+                this.recording_hotkey = false;
+                cx.notify();
+            }
+        });
+
         let app = Self {
             source_path,
             data_path,
@@ -433,7 +443,9 @@ impl SettingsWindow {
             query: String::new(),
             highlight: None,
             notice: None,
-            _subscriptions: vec![subscription, appearance_subscription],
+            recording_hotkey: false,
+            focus_handle,
+            _subscriptions: vec![subscription, appearance_subscription, blur_subscription],
         };
         app.search.focus_handle(cx).focus(window, cx);
         app
@@ -442,7 +454,9 @@ impl SettingsWindow {
     fn select_page(&mut self, page: SettingsPage, window: &mut Window, cx: &mut Context<Self>) {
         self.active_page = page;
         self.highlight = None;
+        self.recording_hotkey = false;
         self.clear_search_value(window, cx);
+        self.search.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 
@@ -454,7 +468,9 @@ impl SettingsWindow {
     ) {
         self.active_page = meta.page;
         self.highlight = Some(meta.id);
+        self.recording_hotkey = false;
         self.clear_search_value(window, cx);
+        self.search.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 
@@ -479,7 +495,7 @@ impl SettingsWindow {
         let next = next.normalized();
 
         if next.hotkey != previous.hotkey {
-            if let Err(error) = hotkey::set_choice(next.hotkey, cx) {
+            if let Err(error) = hotkey::set_choice(next.hotkey.clone(), cx) {
                 self.notice = Some(error.into());
                 cx.notify();
                 return;
@@ -488,7 +504,7 @@ impl SettingsWindow {
 
         if let Err(error) = settings::commit(cx, next.clone()) {
             if next.hotkey != previous.hotkey {
-                let _ = hotkey::set_choice(previous.hotkey, cx);
+                let _ = hotkey::set_choice(previous.hotkey.clone(), cx);
             }
             self.notice = Some(format!("无法保存设置：{error}").into());
             self.settings = previous;
@@ -626,6 +642,26 @@ impl SettingsWindow {
         });
     }
 
+    fn toggle_recording_hotkey(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.recording_hotkey = !self.recording_hotkey;
+        if self.recording_hotkey {
+            self.query.clear();
+            self.search
+                .update(cx, |state, cx| state.set_value("", window, cx));
+            self.highlight = None;
+            self.notice = None;
+            self.focus_handle.focus(window, cx);
+        } else {
+            self.search.focus_handle(cx).focus(window, cx);
+        }
+        cx.notify();
+    }
+
     fn set_click_action(
         &mut self,
         value: ClickAction,
@@ -705,7 +741,7 @@ impl SettingsWindow {
                 settings.smooth_scroll = defaults.smooth_scroll;
             }
             SettingsPage::Shortcuts => {
-                settings.hotkey = defaults.hotkey;
+                settings.hotkey = defaults.hotkey.clone();
             }
             SettingsPage::QuickPaste => {
                 settings.click_action = defaults.click_action;
@@ -717,6 +753,8 @@ impl SettingsWindow {
             SettingsPage::About => {}
         });
         self.highlight = None;
+        self.recording_hotkey = false;
+        self.search.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 
@@ -1025,17 +1063,40 @@ impl SettingsWindow {
 
     fn render_shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut rows = Vec::new();
-        let hotkey_options: Vec<_> = HotkeyChoice::ALL
-            .into_iter()
-            .map(|choice| (choice, choice.label()))
-            .collect();
-        let control = self.segmented(
-            "shortcuts-hotkey",
-            &hotkey_options,
-            self.settings.hotkey,
-            Self::set_hotkey,
-            cx,
-        );
+        let recording = self.recording_hotkey;
+        let hotkey_label = if recording {
+            "请按下组合键…".to_owned()
+        } else {
+            self.settings.hotkey.label()
+        };
+        let control = v_flex()
+            .items_end()
+            .gap_1()
+            .child(div().text_sm().font_medium().child(hotkey_label))
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("record-hotkey")
+                            .xsmall()
+                            .when(recording, |button| button.primary())
+                            .when(!recording, |button| button.ghost())
+                            .label(if recording { "取消" } else { "录制" })
+                            .on_click(cx.listener(Self::toggle_recording_hotkey)),
+                    )
+                    .child(
+                        Button::new("default-hotkey")
+                            .ghost()
+                            .xsmall()
+                            .label("默认")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.recording_hotkey = false;
+                                this.set_hotkey(HotkeyChoice::default(), window, cx);
+                                this.search.focus_handle(cx).focus(window, cx);
+                            })),
+                    ),
+            )
+            .into_any_element();
         rows.push(self.setting_row(meta("hotkey"), control, cx));
 
         let hotkey_state = hotkey::state(cx);
@@ -1539,6 +1600,31 @@ impl SettingsWindow {
         let key = event.keystroke.key.as_str();
         let modifiers = event.keystroke.modifiers;
 
+        if self.recording_hotkey {
+            if key == "escape" {
+                self.recording_hotkey = false;
+                self.notice = None;
+                self.search.focus_handle(cx).focus(window, cx);
+                cx.notify();
+            } else if let Some(binding) =
+                hotkey::capture(modifiers.control, modifiers.alt, modifiers.shift, key)
+            {
+                self.recording_hotkey = false;
+                self.set_hotkey(HotkeyChoice::Custom(binding), window, cx);
+                self.search.focus_handle(cx).focus(window, cx);
+            } else if !matches!(
+                key,
+                "control" | "ctrl" | "shift" | "alt" | "meta" | "super" | "fn" | "function"
+            ) {
+                self.notice = Some(
+                    "快捷键需要包含 Ctrl、Alt 或 Shift，并搭配字母、数字或功能键".into(),
+                );
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return;
+        }
+
         if key == "escape" {
             if !self.query.trim().is_empty() {
                 self.query.clear();
@@ -1557,6 +1643,12 @@ impl SettingsWindow {
     }
 }
 
+impl Focusable for SettingsWindow {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl Render for SettingsWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.search.read(cx).value().to_string();
@@ -1572,6 +1664,7 @@ impl Render for SettingsWindow {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
+            .track_focus(&self.focus_handle)
             .child(
                 h_flex()
                     .flex_1()
