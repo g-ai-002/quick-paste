@@ -18,6 +18,9 @@ mod stub {
         None
     }
     pub fn set_main_window(_hwnd: isize) {}
+    pub fn move_main_window_to_cursor_display() -> bool {
+        false
+    }
     pub fn hide_window(_window: &Window) {}
     pub fn hide_main_window() {}
     pub fn show_main_window() {}

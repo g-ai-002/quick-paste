@@ -179,18 +179,27 @@ pub fn matching_indices(memos: &[Memo], query: &str) -> Vec<usize> {
 /// 列表里需要展示的文本行数：按显式换行和估算的自动换行统计，
 /// 并限制在 `1..=max`。
 pub fn display_line_count(text: &str, max: usize) -> usize {
+    wrapped_line_count(text).clamp(1, max.max(1))
+}
+
+/// 文本按卡片宽度估算后是否超过 `max` 行，超过即需要悬停预览。
+pub fn is_truncated(text: &str, max: usize) -> bool {
+    wrapped_line_count(text) > max.max(1)
+}
+
+fn wrapped_line_count(text: &str) -> usize {
     // 卡片正文可用宽度约为 48 个半角字符；中文等全角字符按 2 个半角计算。
     const LINE_UNITS: usize = 48;
 
-    let mut lines = 0;
-    for line in text.lines() {
-        let units: usize = line
-            .chars()
-            .map(|ch| if ch.is_ascii() { 1 } else { 2 })
-            .sum();
-        lines += units.max(1).div_ceil(LINE_UNITS);
-    }
-    lines.clamp(1, max.max(1))
+    text.lines()
+        .map(|line| {
+            let units: usize = line
+                .chars()
+                .map(|ch| if ch.is_ascii() { 1 } else { 2 })
+                .sum();
+            units.max(1).div_ceil(LINE_UNITS)
+        })
+        .sum()
 }
 
 fn normalize(memos: Vec<Memo>) -> Vec<Memo> {
@@ -451,5 +460,14 @@ memos:
         assert_eq!(display_line_count(&"中".repeat(24), 3), 1);
         assert_eq!(display_line_count(&"中".repeat(25), 3), 2);
         assert_eq!(display_line_count(&"中".repeat(200), 3), 3);
+    }
+
+    #[test]
+    fn detects_text_that_does_not_fit_the_card() {
+        assert!(!is_truncated("短文本", 3));
+        assert!(!is_truncated("一\n二\n三", 3));
+        assert!(is_truncated("一\n二\n三\n四", 3));
+        assert!(is_truncated(&"a".repeat(49), 1));
+        assert!(!is_truncated(&"a".repeat(48), 1));
     }
 }

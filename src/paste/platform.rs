@@ -1,5 +1,6 @@
 use std::{
     ffi::c_void,
+    mem::size_of,
     sync::atomic::{AtomicIsize, Ordering},
     thread,
     time::Duration,
@@ -8,7 +9,10 @@ use std::{
 use gpui_kit::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::{
-    Foundation::HWND,
+    Foundation::{HWND, POINT, RECT},
+    Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    },
     System::Threading::GetCurrentProcessId,
     UI::{
         Input::KeyboardAndMouse::{
@@ -16,8 +20,9 @@ use windows::Win32::{
             KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_V,
         },
         WindowsAndMessaging::{
-            GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-            SetForegroundWindow, ShowWindowAsync, SW_HIDE, SW_RESTORE, SW_SHOW,
+            GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+            IsWindow, IsWindowVisible, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+            SetForegroundWindow, SetWindowPos, ShowWindowAsync, SW_HIDE, SW_RESTORE, SW_SHOW,
         },
     },
 };
@@ -49,6 +54,59 @@ pub fn window_hwnd(window: &Window) -> Option<isize> {
 
 pub fn set_main_window(hwnd: isize) {
     MAIN_WINDOW.store(hwnd, Ordering::Relaxed);
+}
+
+/// 把主窗口移动到鼠标指针所在显示器的工作区中央。
+pub fn move_main_window_to_cursor_display() -> bool {
+    let hwnd = MAIN_WINDOW.load(Ordering::Relaxed);
+    if hwnd == 0 {
+        return false;
+    }
+
+    let handle = HWND(hwnd as *mut c_void);
+    // SAFETY: hwnd 是本进程记录的窗口句柄；坐标与矩形都写入栈上变量。
+    unsafe {
+        let mut cursor = POINT::default();
+        if GetCursorPos(&mut cursor).is_err() {
+            return false;
+        }
+        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        if monitor.0.is_null() {
+            return false;
+        }
+
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return false;
+        }
+
+        let mut rect = RECT::default();
+        if GetWindowRect(handle, &mut rect).is_err() {
+            return false;
+        }
+        let width = rect.right.saturating_sub(rect.left);
+        let height = rect.bottom.saturating_sub(rect.top);
+        if width <= 0 || height <= 0 {
+            return false;
+        }
+        let work = info.rcWork;
+        let x = work.left + (work.right - work.left - width).max(0) / 2;
+        let y = work.top + (work.bottom - work.top - height).max(0) / 2;
+
+        SetWindowPos(
+            handle,
+            None,
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+        .is_ok()
+    }
 }
 
 pub fn hide_window(window: &Window) {

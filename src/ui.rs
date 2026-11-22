@@ -3,18 +3,20 @@ mod smooth_scroll;
 use std::{
     path::{Path, PathBuf},
     rc::Rc,
+    time::{Duration, Instant},
 };
 
 use gpui_kit::{
-    AnyElement, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Pixels, Render,
-    ScrollEvent, SharedString, Size, StatefulInteractiveElement as _, Styled as _, Subscription,
-    Window, div, point, px, size,
+    Anchor, AnyElement, AppContext as _, ClickEvent, ClipboardItem, Context, Entity,
+    Focusable as _, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
+    Pixels, Render, ScrollEvent, SharedString, Size, StatefulInteractiveElement as _, Styled as _,
+    StyleRefinement, Subscription, Window, div, point, px, size,
     component::{
         ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
         VirtualListScrollHandle, WindowExt as _,
         button::{Button, ButtonVariants},
         h_flex,
+        hover_card::HoverCard,
         input::{Input, InputEvent, InputState},
         scroll::Scrollbar,
         v_flex, v_virtual_list,
@@ -23,9 +25,8 @@ use gpui_kit::{
 };
 
 use self::smooth_scroll::SmoothScroll;
-use crate::{app::HotkeyStatus, memo, paste};
+use crate::{hotkey, memo, paste, settings, settings_window};
 
-const MAX_TEXT_LINES: usize = 3;
 const ROW_LINE_HEIGHT: f32 = 22.0;
 const ROW_TAG_HEIGHT: f32 = 20.0;
 const ROW_MARGIN_X: f32 = 8.0;
@@ -41,6 +42,7 @@ pub struct MemoApp {
     source_path: PathBuf,
     data_path: PathBuf,
     memos: Vec<memo::Memo>,
+    settings: settings::Settings,
     filtered: Rc<Vec<usize>>,
     row_sizes: Rc<Vec<Size<Pixels>>>,
     list_scroll: VirtualListScrollHandle,
@@ -49,7 +51,8 @@ pub struct MemoApp {
     filter: String,
     hovered: Option<usize>,
     notice: Option<SharedString>,
-    hotkey: HotkeyStatus,
+    window_active: bool,
+    suppress_blur_until: Option<Instant>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -59,8 +62,8 @@ impl MemoApp {
         cx: &mut Context<Self>,
         source_path: PathBuf,
         data_path: PathBuf,
-        hotkey: HotkeyStatus,
     ) -> Self {
+        let app_settings = settings::current(cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索备忘录…"));
 
         let subscription = cx.subscribe_in(
@@ -74,6 +77,9 @@ impl MemoApp {
                     cx.notify();
                 }
                 InputEvent::PressEnter { .. } => {
+                    if !this.settings.enter_pastes_first {
+                        return;
+                    }
                     this.filter = state.read(cx).value().to_string();
                     this.refresh_filter();
                     if let Some(index) = this.filtered.first().copied() {
@@ -98,17 +104,45 @@ impl MemoApp {
             }
         };
         let filtered = Rc::new(memo::matching_indices(&memos, ""));
-        let row_sizes = Rc::new(Self::compute_row_sizes(&memos, filtered.as_slice()));
+        let row_sizes = Rc::new(Self::compute_row_sizes(
+            &memos,
+            filtered.as_slice(),
+            &app_settings,
+        ));
 
         window.on_window_should_close(cx, |window, _cx| {
             paste::hide_window(window);
             false
         });
 
+        let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
+            let active = window.is_window_active();
+            let was_active = this.window_active;
+            this.window_active = active;
+            if was_active && !active {
+                let suppress = this
+                    .suppress_blur_until
+                    .is_some_and(|until| Instant::now() < until);
+                if suppress {
+                    this.suppress_blur_until = None;
+                    this.window_active = true;
+                } else if this.settings.auto_hide_on_blur {
+                    paste::hide_window(window);
+                }
+            }
+            cx.notify();
+        });
+        let appearance_subscription = cx.observe_window_appearance(window, |_, _window, cx| {
+            if settings::current(cx).theme == settings::ThemeChoice::System {
+                gpui_kit::component::Theme::sync_system_appearance(None, cx);
+            }
+        });
+
         let app = Self {
             source_path,
             data_path,
             memos,
+            settings: app_settings,
             filtered,
             row_sizes,
             list_scroll: VirtualListScrollHandle::new(),
@@ -117,11 +151,19 @@ impl MemoApp {
             filter: String::new(),
             hovered: None,
             notice,
-            hotkey,
-            _subscriptions: vec![subscription],
+            window_active: window.is_window_active(),
+            suppress_blur_until: None,
+            _subscriptions: vec![
+                subscription,
+                activation_subscription,
+                appearance_subscription,
+            ],
         };
         if let Some(hwnd) = paste::window_hwnd(window) {
             paste::set_main_window(hwnd);
+            if app.settings.show_on_cursor_display {
+                paste::move_main_window_to_cursor_display();
+            }
         }
         app.search.focus_handle(cx).focus(window, cx);
         app
@@ -129,6 +171,7 @@ impl MemoApp {
 
     pub fn on_hotkey(&mut self, cx: &mut Context<Self>) {
         if paste::is_main_window_foreground() {
+            self.window_active = false;
             paste::hide_main_window();
         } else {
             self.on_show_request(cx);
@@ -136,9 +179,29 @@ impl MemoApp {
     }
 
     pub fn on_show_request(&mut self, cx: &mut Context<Self>) {
+        self.sync_settings(cx);
+        if self.settings.theme == settings::ThemeChoice::System {
+            gpui_kit::component::Theme::sync_system_appearance(None, cx);
+        }
+        if self.settings.show_on_cursor_display {
+            paste::move_main_window_to_cursor_display();
+        }
         paste::show_main_window();
+        self.window_active = true;
+        self.suppress_blur_until = None;
         self.reload(cx);
         cx.notify();
+    }
+
+    fn sync_settings(&mut self, cx: &App) {
+        let current = settings::current(cx);
+        if current != self.settings {
+            let layout_changed = current.max_text_lines != self.settings.max_text_lines;
+            self.settings = current;
+            if layout_changed {
+                self.refresh_filter();
+            }
+        }
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -214,7 +277,7 @@ impl MemoApp {
             .filtered
             .iter()
             .filter_map(|index| self.memos.get(*index))
-            .map(Self::row_height)
+            .map(|memo| Self::row_height(memo, &self.settings))
             .sum();
         let scroll_size = size(px(0.0), px(scroll_height));
 
@@ -240,6 +303,7 @@ impl MemoApp {
         };
 
         let text = SharedString::from(memo.text.clone());
+        let preview_text = text.clone();
         let tags: Option<SharedString> = if memo.tags.is_empty() {
             None
         } else {
@@ -251,10 +315,23 @@ impl MemoApp {
                     .join("  "),
             ))
         };
-        let line_count = memo::display_line_count(text.as_ref(), MAX_TEXT_LINES);
+        let preview_tags = tags.clone();
+        let max_lines = self.settings.max_text_lines;
+        let line_count = memo::display_line_count(text.as_ref(), max_lines);
+        let truncated = memo::is_truncated(text.as_ref(), max_lines);
+        let tags_truncated = tags.as_ref().is_some_and(|tags| {
+            tags.as_ref()
+                .chars()
+                .map(|ch| if ch.is_ascii() { 1 } else { 2 })
+                .sum::<usize>()
+                > 60
+        });
         let pinned = memo.is_pinned;
-        let row_height = Self::row_height(memo);
+        let usage_count = memo.usage_count;
+        let row_height = Self::row_height(memo, &self.settings);
         let card_height = row_height - ROW_GAP;
+        let card_radius = self.settings.card_radius;
+        let click_action = self.settings.click_action;
 
         let scrolling = self.smooth_scroll.is_active();
         let hovered = !scrolling && self.hovered == Some(index);
@@ -263,100 +340,165 @@ impl MemoApp {
         let pin_hover_bg = cx.theme().muted;
         let muted_foreground = cx.theme().muted_foreground;
 
+        let card = v_flex()
+            .id(("memo-card", index))
+            .relative()
+            .w_full()
+            .h(px(card_height))
+            .gap(px(ROW_CONTENT_GAP))
+            .overflow_hidden()
+            .rounded(px(card_radius))
+            .bg(card_bg)
+            .px(px(ROW_PADDING_X))
+            .py(px(ROW_PADDING_Y))
+            .when(hovered, |this| this.shadow_sm())
+            .on_hover(cx.listener(move |this, is_hovered: &bool, _window, cx| {
+                let next = if *is_hovered {
+                    Some(index)
+                } else if this.hovered == Some(index) {
+                    None
+                } else {
+                    return;
+                };
+                if this.hovered != next {
+                    this.hovered = next;
+                    if !this.smooth_scroll.is_active() {
+                        cx.notify();
+                    }
+                }
+            }))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                let should_paste = match click_action {
+                    settings::ClickAction::DoubleClick => event.click_count() == 2,
+                    settings::ClickAction::SingleClick => event.click_count() >= 1,
+                };
+                if should_paste {
+                    this.paste_index(index, window, cx);
+                }
+            }))
+            .child(
+                div()
+                    .w_full()
+                    .flex_shrink_0()
+                    .h(px(line_count as f32 * ROW_LINE_HEIGHT))
+                    .overflow_hidden()
+                    .pr(px(ROW_TEXT_RIGHT))
+                    .text_sm()
+                    .line_height(px(ROW_LINE_HEIGHT))
+                    .line_clamp(line_count)
+                    .child(text),
+            )
+            .children(tags.map(|tags| {
+                div()
+                    .w_full()
+                    .flex_shrink_0()
+                    .h(px(ROW_TAG_HEIGHT))
+                    .truncate()
+                    .text_xs()
+                    .line_height(px(ROW_TAG_HEIGHT))
+                    .text_color(muted_foreground)
+                    .child(tags)
+            }))
+            .children((pinned || hovered).then(|| {
+                div()
+                    .id(("memo-pin", index))
+                    .absolute()
+                    .top(px(PIN_INSET))
+                    .right(px(PIN_INSET))
+                    .w(px(PIN_SIZE))
+                    .h(px(PIN_SIZE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .when(hovered, |this| {
+                        this.hover(move |this| this.bg(pin_hover_bg))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                cx.stop_propagation();
+                                this.toggle_pin(index, cx);
+                            }))
+                    })
+                    .child(
+                        Icon::new(if pinned {
+                            IconName::StarFill
+                        } else {
+                            IconName::Star
+                        })
+                        .small()
+                        .text_color(primary),
+                    )
+            }));
+
+        let content = if self.settings.hover_preview
+            && (truncated || tags_truncated)
+            && !scrolling
+        {
+            let popover_bg = cx.theme().popover;
+            let popover_foreground = cx.theme().popover_foreground;
+            let border = cx.theme().border;
+            let preview = v_flex()
+                .id(SharedString::from(format!("memo-preview-{index}")))
+                .w(px(380.0))
+                .max_h(px(420.0))
+                .gap_2()
+                .rounded(px(10.0))
+                .border_1()
+                .border_color(border)
+                .bg(popover_bg)
+                .text_color(popover_foreground)
+                .shadow_lg()
+                .p_3()
+                .child(
+                    div()
+                        .id(SharedString::from(format!("memo-preview-text-{index}")))
+                        .max_h(px(300.0))
+                        .overflow_y_scroll()
+                        .text_sm()
+                        .line_height(px(20.0))
+                        .child(preview_text),
+                )
+                .children(preview_tags.map(|tags| {
+                    div()
+                        .id(SharedString::from(format!("memo-preview-tags-{index}")))
+                        .max_h(px(56.0))
+                        .overflow_y_scroll()
+                        .text_xs()
+                        .text_color(muted_foreground)
+                        .child(tags)
+                }))
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .text_xs()
+                        .text_color(muted_foreground)
+                        .child(format!("使用 {usage_count} 次"))
+                        .children(pinned.then(|| div().child("已置顶"))),
+                );
+
+            HoverCard::new(("memo-hover-preview", index))
+                .appearance(false)
+                .anchor(Anchor::TopLeft)
+                .open_delay(Duration::from_millis(
+                    self.settings.hover_preview_delay_ms,
+                ))
+                .close_delay(Duration::from_millis(120))
+                .trigger_style(StyleRefinement::default().w_full())
+                .trigger(card)
+                .child(preview)
+                .into_any_element()
+        } else {
+            card.into_any_element()
+        };
+
         v_flex()
             .id(("memo-row", index))
             .w_full()
             .h(px(row_height))
             .px(px(ROW_MARGIN_X))
             .pb(px(ROW_GAP))
-            .child(
-                v_flex()
-                    .id(("memo-card", index))
-                    .relative()
-                    .w_full()
-                    .h(px(card_height))
-                    .gap(px(ROW_CONTENT_GAP))
-                    .overflow_hidden()
-                    .rounded_md()
-                    .bg(card_bg)
-                    .px(px(ROW_PADDING_X))
-                    .py(px(ROW_PADDING_Y))
-                    .when(hovered, |this| this.shadow_sm())
-                    .on_hover(cx.listener(move |this, is_hovered: &bool, _window, cx| {
-                        let next = if *is_hovered {
-                            Some(index)
-                        } else if this.hovered == Some(index) {
-                            None
-                        } else {
-                            return;
-                        };
-                        if this.hovered != next {
-                            this.hovered = next;
-                            if !this.smooth_scroll.is_active() {
-                                cx.notify();
-                            }
-                        }
-                    }))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                        if event.click_count() == 2 {
-                            this.paste_index(index, window, cx);
-                        }
-                    }))
-                    .child(
-                        div()
-                            .w_full()
-                            .flex_shrink_0()
-                            .h(px(line_count as f32 * ROW_LINE_HEIGHT))
-                            .overflow_hidden()
-                            .pr(px(ROW_TEXT_RIGHT))
-                            .text_sm()
-                            .line_height(px(ROW_LINE_HEIGHT))
-                            .line_clamp(line_count)
-                            .child(text),
-                    )
-                    .children(tags.map(|tags| {
-                        div()
-                            .w_full()
-                            .flex_shrink_0()
-                            .h(px(ROW_TAG_HEIGHT))
-                            .truncate()
-                            .text_xs()
-                            .line_height(px(ROW_TAG_HEIGHT))
-                            .text_color(muted_foreground)
-                            .child(tags)
-                    }))
-                    .children((pinned || hovered).then(|| {
-                        div()
-                            .id(("memo-pin", index))
-                            .absolute()
-                            .top(px(PIN_INSET))
-                            .right(px(PIN_INSET))
-                            .w(px(PIN_SIZE))
-                            .h(px(PIN_SIZE))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_md()
-                            .when(hovered, |this| {
-                                this.hover(move |this| this.bg(pin_hover_bg))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(move |this, _, _window, cx| {
-                                        cx.stop_propagation();
-                                        this.toggle_pin(index, cx);
-                                    }))
-                            })
-                            .child(
-                                Icon::new(if pinned {
-                                    IconName::StarFill
-                                } else {
-                                    IconName::Star
-                                })
-                                .small()
-                                .text_color(primary),
-                            )
-                    })),
-            )
+            .child(content)
             .into_any_element()
     }
 
@@ -364,13 +506,18 @@ impl MemoApp {
         let muted_foreground = cx.theme().muted_foreground;
         let border = cx.theme().border;
         let danger = cx.theme().danger;
+        let hotkey = hotkey::state(cx);
+        let click_hint = match self.settings.click_action {
+            settings::ClickAction::DoubleClick => "双击粘贴",
+            settings::ClickAction::SingleClick => "单击粘贴",
+        };
 
-        let hint: SharedString = match (&self.hotkey.label, &self.hotkey.error) {
+        let hint: SharedString = match (&hotkey.label, &hotkey.error) {
             (Some(label), _) => {
-                format!("双击粘贴 · {label} 显示/隐藏 · 关闭窗口后仍在后台运行").into()
+                format!("{click_hint} · {label} 显示/隐藏 · 关闭窗口后仍在后台运行").into()
             }
-            (None, Some(error)) => format!("双击粘贴 · {error}").into(),
-            (None, None) => "双击粘贴".into(),
+            (None, Some(error)) => format!("{click_hint} · {error}").into(),
+            (None, None) => click_hint.into(),
         };
 
         v_flex()
@@ -424,6 +571,14 @@ impl MemoApp {
                             .on_click(cx.listener(Self::open_data_file)),
                     )
                     .child(
+                        Button::new("open-settings")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Settings)
+                            .tooltip("设置")
+                            .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
+                    )
+                    .child(
                         Button::new("quit-app")
                             .ghost()
                             .xsmall()
@@ -440,6 +595,26 @@ impl MemoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.settings.smooth_scroll {
+            self.smooth_scroll.reset();
+            let mut delta = event.delta.pixel_delta(window.line_height());
+            if event.modifiers.shift && delta.y == px(0.0) {
+                delta.y = delta.x;
+            }
+            if delta.y == px(0.0) {
+                return;
+            }
+            let current = self.list_scroll.as_ref().offset();
+            let max_offset = self.list_scroll.as_ref().max_offset().y;
+            let offset = (current.y + delta.y).clamp(-max_offset, px(0.0));
+            self.list_scroll
+                .as_ref()
+                .set_offset(point(current.x, offset));
+            self.hovered = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         let was_scrolling = self.smooth_scroll.is_active();
         if self
             .smooth_scroll
@@ -481,6 +656,17 @@ impl MemoApp {
         }
     }
 
+    fn open_settings(&mut self, cx: &mut Context<Self>) {
+        self.suppress_blur_until = Some(Instant::now() + Duration::from_millis(800));
+        if let Err(error) =
+            settings_window::open(cx, self.source_path.clone(), self.data_path.clone())
+        {
+            self.suppress_blur_until = None;
+            self.notice = Some(format!("无法打开设置：{error}").into());
+            cx.notify();
+        }
+    }
+
     fn toggle_pin(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(memo) = self.memos.get(index) else {
             return;
@@ -514,6 +700,9 @@ impl MemoApp {
         if text.trim().is_empty() {
             return;
         }
+        let track_usage = self.settings.track_usage;
+        let paste_action = self.settings.paste_action;
+        let clear_search = self.settings.clear_search_after_paste;
 
         cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
         let copied = cx
@@ -526,7 +715,9 @@ impl MemoApp {
             return;
         }
 
-        if let Err(error) = self.record_usage(index) {
+        if track_usage
+            && let Err(error) = self.record_usage(index)
+        {
             self.notice = Some(format!("记录使用次数失败：{error}").into());
             cx.notify();
             return;
@@ -534,11 +725,30 @@ impl MemoApp {
 
         self.notice = None;
 
-        if !paste::hide_then_paste(window) {
-            self.notice =
-                Some("已复制到剪贴板；未找到可粘贴的窗口，请手动粘贴".into());
-            cx.notify();
+        match paste_action {
+            settings::PasteAction::AutoPaste => {
+                if !paste::hide_then_paste(window) {
+                    self.notice =
+                        Some("已复制到剪贴板；未找到可粘贴的窗口，请手动粘贴".into());
+                    cx.notify();
+                    return;
+                }
+            }
+            settings::PasteAction::CopyOnly => {
+                paste::hide_window(window);
+            }
         }
+
+        if clear_search {
+            self.clear_search(window, cx);
+        }
+    }
+
+    fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter.clear();
+        self.search
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.refresh_filter();
     }
 
     fn record_usage(&mut self, index: usize) -> Result<(), memo::MemoError> {
@@ -565,7 +775,11 @@ impl MemoApp {
         self.smooth_scroll.reset();
         self.hovered = None;
         let filtered = memo::matching_indices(&self.memos, &self.filter);
-        self.row_sizes = Rc::new(Self::compute_row_sizes(&self.memos, filtered.as_slice()));
+        self.row_sizes = Rc::new(Self::compute_row_sizes(
+            &self.memos,
+            filtered.as_slice(),
+            &self.settings,
+        ));
         self.filtered = Rc::new(filtered);
     }
 
@@ -597,6 +811,9 @@ impl MemoApp {
         } else if modifiers.control && !modifiers.alt && !modifiers.shift && key == "f" {
             self.focus_search(window, cx);
             cx.stop_propagation();
+        } else if modifiers.control && !modifiers.alt && !modifiers.shift && key == "," {
+            self.open_settings(cx);
+            cx.stop_propagation();
         }
     }
 
@@ -615,16 +832,20 @@ impl MemoApp {
         Ok(memos)
     }
 
-    fn compute_row_sizes(memos: &[memo::Memo], filtered: &[usize]) -> Vec<Size<Pixels>> {
+    fn compute_row_sizes(
+        memos: &[memo::Memo],
+        filtered: &[usize],
+        settings: &settings::Settings,
+    ) -> Vec<Size<Pixels>> {
         filtered
             .iter()
             .filter_map(|index| memos.get(*index))
-            .map(|memo| size(px(0.0), px(Self::row_height(memo))))
+            .map(|memo| size(px(0.0), px(Self::row_height(memo, settings))))
             .collect()
     }
 
-    fn row_height(memo: &memo::Memo) -> f32 {
-        let lines = memo::display_line_count(&memo.text, MAX_TEXT_LINES) as f32;
+    fn row_height(memo: &memo::Memo, settings: &settings::Settings) -> f32 {
+        let lines = memo::display_line_count(&memo.text, settings.max_text_lines) as f32;
         let tags = if memo.tags.is_empty() {
             0.0
         } else {
@@ -639,6 +860,7 @@ impl Render for MemoApp {
         if let Some(hwnd) = paste::window_hwnd(window) {
             paste::set_main_window(hwnd);
         }
+        self.sync_settings(cx);
 
         // 清除按钮等程序化改值不会发 Change 事件，这里按实际内容兜底同步过滤词。
         let query = self.search.read(cx).value().to_string();

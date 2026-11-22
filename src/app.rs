@@ -6,48 +6,22 @@ use std::{
 };
 
 use async_channel::Receiver;
-use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
-    hotkey::{Code, HotKey, Modifiers as HotkeyModifiers},
-};
 use gpui_kit::{
-    App, AppContext as _, Entity, Global, SharedString, TitlebarOptions, WindowBounds,
-    WindowOptions, px, size,
+    App, AppContext as _, Entity, Global, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
 
 use crate::{
-    memo, memory_trim, paste,
+    hotkey, memo, memory_trim, paste, settings, settings_window,
     single_instance::SingleInstance,
     ui::MemoApp,
 };
-
-#[derive(Clone)]
-pub struct HotkeyStatus {
-    pub label: Option<SharedString>,
-    pub error: Option<SharedString>,
-}
-
-impl HotkeyStatus {
-    fn ready(label: &str) -> Self {
-        Self {
-            label: Some(label.into()),
-            error: None,
-        }
-    }
-
-    fn failed(message: impl Into<SharedString>) -> Self {
-        Self {
-            label: None,
-            error: Some(message.into()),
-        }
-    }
-}
 
 #[derive(Clone)]
 struct AppPaths {
     data_dir: PathBuf,
     source: PathBuf,
     memos: PathBuf,
+    settings: PathBuf,
     crash_log: PathBuf,
     runtime_dir: PathBuf,
 }
@@ -62,6 +36,7 @@ impl AppPaths {
         Self {
             source,
             memos,
+            settings: data_dir.join("settings.yaml"),
             crash_log: data_dir.join("crash.log"),
             runtime_dir: data_dir.join("runtime"),
             data_dir,
@@ -72,10 +47,6 @@ impl AppPaths {
 struct InstanceGuard(#[allow(dead_code)] SingleInstance);
 
 impl Global for InstanceGuard {}
-
-struct HotkeyManagerHolder(#[allow(dead_code)] GlobalHotKeyManager);
-
-impl Global for HotkeyManagerHolder {}
 
 pub fn run() {
     let paths = AppPaths::discover();
@@ -99,18 +70,30 @@ pub fn run() {
     };
     let activation_receiver = instance.activation_receiver();
 
+    let initial_settings = match settings::load(&paths.settings) {
+        Ok(settings) => settings,
+        Err(error) => {
+            append_log(&paths.crash_log, &format!("读取设置失败：{error}"));
+            settings::Settings::default()
+        }
+    };
+
     paste::start_foreground_tracker();
 
     let source_path = paths.source.clone();
     let memos_path = paths.memos.clone();
+    let settings_path = paths.settings.clone();
 
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            settings::install(cx, settings_path, initial_settings.clone());
+            settings::apply_theme(initial_settings.theme, None, cx);
+            settings_window::install(cx);
             cx.set_global(InstanceGuard(instance));
 
-            let (hotkey_status, hotkey_receiver) = install_hotkey(cx);
+            let hotkey_receiver = hotkey::install(cx, initial_settings.hotkey);
             let options = window_options(cx);
             let (_, view) = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| {
@@ -119,13 +102,15 @@ pub fn run() {
                         cx,
                         source_path.clone(),
                         memos_path.clone(),
-                        hotkey_status.clone(),
                     )
                 })
             })
             .unwrap_or_else(|error| panic!("无法创建主窗口：{error}"));
 
             memory_trim::schedule_startup_cleanup();
+            if initial_settings.start_hidden {
+                paste::hide_main_window();
+            }
             spawn_hotkey_task(cx, view.clone(), hotkey_receiver);
             spawn_activation_task(cx, view, activation_receiver);
         });
@@ -142,54 +127,6 @@ fn window_options(cx: &mut App) -> WindowOptions {
         app_id: Some("com.g-ai-002.quick-paste".to_owned()),
         ..Default::default()
     }
-}
-
-fn install_hotkey(cx: &mut App) -> (HotkeyStatus, Receiver<()>) {
-    let (sender, receiver) = async_channel::unbounded();
-    GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-        if event.state == HotKeyState::Pressed {
-            let _ = sender.try_send(());
-        }
-    }));
-
-    let manager = match GlobalHotKeyManager::new() {
-        Ok(manager) => manager,
-        Err(error) => {
-            return (
-                HotkeyStatus::failed(format!("全局快捷键初始化失败：{error}")),
-                receiver,
-            );
-        }
-    };
-
-    let candidates = [
-        (
-            HotKey::new(
-                Some(HotkeyModifiers::CONTROL | HotkeyModifiers::SHIFT),
-                Code::KeyX,
-            ),
-            "Ctrl+Shift+X",
-        ),
-        (
-            HotKey::new(
-                Some(HotkeyModifiers::CONTROL | HotkeyModifiers::ALT),
-                Code::KeyV,
-            ),
-            "Ctrl+Alt+V",
-        ),
-    ];
-
-    for (hotkey, label) in candidates {
-        if manager.register(hotkey).is_ok() {
-            cx.set_global(HotkeyManagerHolder(manager));
-            return (HotkeyStatus::ready(label), receiver);
-        }
-    }
-
-    (
-        HotkeyStatus::failed("全局快捷键注册失败，可再次启动程序唤回窗口"),
-        receiver,
-    )
 }
 
 fn spawn_hotkey_task(cx: &mut App, view: Entity<MemoApp>, receiver: Receiver<()>) {
