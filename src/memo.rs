@@ -1,26 +1,41 @@
 //! 备忘录的 YAML 持久化。
 //!
-//! 文件只有一层 `memos` 列表，每项是一个纯文本字符串，方便直接用编辑器修改。
+//! 每条记录包含 `text`、`usage_count`、`is_pinned`、`tags` 四个字段。
+//! `text` / `tags` 以外部编辑的 `memos.yaml` 为准，`usage_count` / `is_pinned`
+//! 由本程序维护；重新加载时优先沿用本地文件里的这两个值。
 
 use std::{
+    collections::HashSet,
     fs,
     io::Write as _,
     path::{Path, PathBuf},
 };
 
 use atomic_write_file::AtomicWriteFile;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use thiserror::Error;
 
 const HEADER: &str = "\
 # 快速粘贴 · 备忘录数据
-# 纯文本 YAML，可直接编辑；回到程序后点击「重新加载」即可生效。
+# text / tags 由外部编辑；usage_count / is_pinned 由本程序维护。
+# 修改后回到程序点击「重新加载」即可生效。
 ";
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Memo {
+    pub text: String,
+    #[serde(default)]
+    pub usage_count: u64,
+    #[serde(default)]
+    pub is_pinned: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
-struct MemoDocument {
-    memos: Vec<String>,
+struct MemoDocument<'a> {
+    memos: &'a [Memo],
 }
 
 #[derive(Debug, Error)]
@@ -34,7 +49,7 @@ pub enum MemoError {
 }
 
 /// 读取备忘录；文件不存在时创建一份空列表并返回空列表。
-pub fn load_or_create(path: &Path) -> Result<Vec<String>, MemoError> {
+pub fn load_or_create(path: &Path) -> Result<Vec<Memo>, MemoError> {
     if !path.exists() {
         save(path, &[])?;
         return Ok(Vec::new());
@@ -44,15 +59,19 @@ pub fn load_or_create(path: &Path) -> Result<Vec<String>, MemoError> {
     parse(&content)
 }
 
+/// 读取已存在的备忘录文件，不会创建新文件。
+pub fn load(path: &Path) -> Result<Vec<Memo>, MemoError> {
+    let content = fs::read_to_string(path)?;
+    parse(&content)
+}
+
 /// 以原子方式写入备忘录文件。
-pub fn save(path: &Path, memos: &[String]) -> Result<(), MemoError> {
+pub fn save(path: &Path, memos: &[Memo]) -> Result<(), MemoError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let document = MemoDocument {
-        memos: memos.to_vec(),
-    };
+    let document = MemoDocument { memos };
     let yaml = serde_yaml::to_string(&document)?;
     let content = format!("{}{}", HEADER, yaml);
 
@@ -63,8 +82,8 @@ pub fn save(path: &Path, memos: &[String]) -> Result<(), MemoError> {
     Ok(())
 }
 
-/// 解析 YAML。既接受 `memos:` 映射，也接受顶层的字符串列表。
-pub fn parse(content: &str) -> Result<Vec<String>, MemoError> {
+/// 解析 YAML。既接受 `memos:` 映射，也接受顶层的记录列表。
+pub fn parse(content: &str) -> Result<Vec<Memo>, MemoError> {
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let only_comments = content
         .lines()
@@ -99,24 +118,45 @@ pub fn parse(content: &str) -> Result<Vec<String>, MemoError> {
 
     let mut memos = Vec::with_capacity(items.len());
     for item in items {
-        match item {
-            Value::String(text) => memos.push(text),
-            Value::Number(number) => memos.push(number.to_string()),
-            Value::Bool(flag) => memos.push(flag.to_string()),
-            Value::Null => {}
-            _ => {
-                return Err(MemoError::Format(
-                    "memos 的每一项必须是纯文本".to_owned(),
-                ));
-            }
-        }
+        memos.push(parse_item(item)?);
     }
 
     Ok(normalize(memos))
 }
 
-/// 按忽略大小写的子串匹配，返回原列表中的下标。
-pub fn matching_indices<T: AsRef<str>>(memos: &[T], query: &str) -> Vec<usize> {
+fn parse_item(item: Value) -> Result<Memo, MemoError> {
+    match item {
+        item @ Value::Mapping(_) => serde_yaml::from_value(item)
+            .map_err(|error| MemoError::Format(format!("备忘录字段无效：{error}"))),
+        _ => Err(MemoError::Format(
+            "memos 的每一项必须是记录映射".to_owned(),
+        )),
+    }
+}
+
+/// 列表顺序：置顶优先，其次按使用次数从多到少；次数相同保持文件顺序。
+pub fn sort_for_display(memos: &mut [Memo]) {
+    memos.sort_by_key(|memo| (!memo.is_pinned, std::cmp::Reverse(memo.usage_count)));
+}
+
+/// 以 `source` 的 text / tags 为准，优先沿用 `local` 的 usage_count / is_pinned。
+pub fn merge(source: &[Memo], local: &[Memo]) -> Vec<Memo> {
+    source
+        .iter()
+        .map(|memo| {
+            let state = local.iter().find(|local| local.text == memo.text);
+            Memo {
+                text: memo.text.clone(),
+                usage_count: state.map_or(memo.usage_count, |state| state.usage_count),
+                is_pinned: state.map_or(memo.is_pinned, |state| state.is_pinned),
+                tags: memo.tags.clone(),
+            }
+        })
+        .collect()
+}
+
+/// 按忽略大小写的子串匹配文本或标签，返回原列表中的下标。
+pub fn matching_indices(memos: &[Memo], query: &str) -> Vec<usize> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
         return (0..memos.len()).collect();
@@ -126,17 +166,66 @@ pub fn matching_indices<T: AsRef<str>>(memos: &[T], query: &str) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter_map(|(index, memo)| {
-            let memo: &str = memo.as_ref();
-            memo.to_lowercase().contains(&query).then_some(index)
+            let matches_text = memo.text.to_lowercase().contains(&query);
+            let matches_tag = memo
+                .tags
+                .iter()
+                .any(|tag| tag.to_lowercase().contains(&query));
+            (matches_text || matches_tag).then_some(index)
         })
         .collect()
 }
 
-fn normalize(memos: Vec<String>) -> Vec<String> {
-    memos
-        .into_iter()
-        .filter(|memo| !memo.trim().is_empty())
-        .collect()
+/// 列表里需要展示的文本行数：按显式换行和估算的自动换行统计，
+/// 并限制在 `1..=max`。
+pub fn display_line_count(text: &str, max: usize) -> usize {
+    // 卡片正文可用宽度约为 48 个半角字符；中文等全角字符按 2 个半角计算。
+    const LINE_UNITS: usize = 48;
+
+    let mut lines = 0;
+    for line in text.lines() {
+        let units: usize = line
+            .chars()
+            .map(|ch| if ch.is_ascii() { 1 } else { 2 })
+            .sum();
+        lines += units.max(1).div_ceil(LINE_UNITS);
+    }
+    lines.clamp(1, max.max(1))
+}
+
+fn normalize(memos: Vec<Memo>) -> Vec<Memo> {
+    memos.into_iter().filter_map(normalize_one).collect()
+}
+
+fn normalize_one(mut memo: Memo) -> Option<Memo> {
+    if memo.text.trim().is_empty() {
+        return None;
+    }
+
+    let mut tags = Vec::with_capacity(memo.tags.len());
+    let mut seen = HashSet::new();
+    for tag in &memo.tags {
+        let tag = tag.trim();
+        if !tag.is_empty() && seen.insert(tag.to_lowercase()) {
+            tags.push(tag.to_owned());
+        }
+    }
+    memo.tags = tags;
+    Some(memo)
+}
+
+/// 外部编辑的数据文件：优先当前工作目录，其次可执行文件所在目录。
+pub fn external_source_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(directory) = std::env::current_dir() {
+        candidates.push(directory.join("memos.yaml"));
+    }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(directory) = executable.parent()
+    {
+        candidates.push(directory.join("memos.yaml"));
+    }
+    candidates.into_iter().find(|path| path.exists())
 }
 
 /// 在文件管理器中选中数据文件；文件不存在时打开所在目录。
@@ -170,23 +259,42 @@ pub fn data_directory() -> PathBuf {
 mod tests {
     use super::*;
 
+    fn memo(text: &str, usage_count: u64, is_pinned: bool, tags: &[&str]) -> Memo {
+        Memo {
+            text: text.to_owned(),
+            usage_count,
+            is_pinned,
+            tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
+        }
+    }
+
     #[test]
     fn parses_document_mapping() {
         let memos = parse(
             "\
 memos:
-- 第一条
-- 第二条
+- text: 第一条
+  usage_count: 3
+  is_pinned: true
+  tags:
+    - 工作
+    - 常用
+- text: 第二条
 ",
         )
         .expect("should parse");
-        assert_eq!(memos, vec!["第一条", "第二条"]);
+        assert_eq!(memos.len(), 2);
+        assert_eq!(memos[0], memo("第一条", 3, true, &["工作", "常用"]));
+        assert_eq!(memos[1], memo("第二条", 0, false, &[]));
     }
 
     #[test]
-    fn parses_bare_sequence() {
-        let memos = parse("- alpha\n- beta\n").expect("should parse");
-        assert_eq!(memos, vec!["alpha", "beta"]);
+    fn parses_bare_sequence_of_records() {
+        let memos = parse("- text: alpha\n- text: beta\n").expect("should parse");
+        assert_eq!(
+            memos,
+            vec![memo("alpha", 0, false, &[]), memo("beta", 0, false, &[])]
+        );
     }
 
     #[test]
@@ -194,13 +302,13 @@ memos:
         let memos = parse(
             "\
 memos:
-- |-
-  第一行
-  第二行
+- text: |-
+    第一行
+    第二行
 ",
         )
         .expect("should parse");
-        assert_eq!(memos, vec!["第一行\n第二行"]);
+        assert_eq!(memos, vec![memo("第一行\n第二行", 0, false, &[])]);
     }
 
     #[test]
@@ -217,14 +325,70 @@ memos:
 
     #[test]
     fn drops_blank_entries_but_keeps_leading_spaces() {
-        let memos = parse("- '   '\n- \"   缩进内容\"\n").expect("should parse");
-        assert_eq!(memos, vec!["   缩进内容"]);
+        let memos =
+            parse("memos:\n- text: '   '\n- text: \"   缩进内容\"\n").expect("should parse");
+        assert_eq!(memos, vec![memo("   缩进内容", 0, false, &[])]);
     }
 
     #[test]
-    fn parses_numbers_and_booleans_as_text() {
-        let memos = parse("memos:\n- 12345\n- 3.14\n- true\n").expect("should parse");
-        assert_eq!(memos, vec!["12345", "3.14", "true"]);
+    fn rejects_legacy_string_entries() {
+        let error = parse("memos:\n- 纯文本\n").expect_err("should reject");
+        assert!(matches!(error, MemoError::Format(_)));
+    }
+
+    #[test]
+    fn normalizes_tags() {
+        let memos = parse(
+            "\
+memos:
+- text: 备忘
+  tags:
+    - 工作
+    - ' 工作 '
+    - ''
+    - AI
+    - ai
+",
+        )
+        .expect("should parse");
+        assert_eq!(memos[0].tags, vec!["工作", "AI"]);
+    }
+
+    #[test]
+    fn sorts_pinned_first_then_usage() {
+        let mut memos = vec![
+            memo("普通一", 1, false, &[]),
+            memo("置顶一", 1, true, &[]),
+            memo("普通二", 5, false, &[]),
+            memo("置顶二", 5, true, &[]),
+        ];
+
+        sort_for_display(&mut memos);
+
+        let texts: Vec<&str> = memos.iter().map(|memo| memo.text.as_str()).collect();
+        assert_eq!(texts, ["置顶二", "置顶一", "普通二", "普通一"]);
+    }
+
+    #[test]
+    fn keeps_file_order_for_equal_usage() {
+        let mut memos = vec![memo("先", 2, false, &[]), memo("后", 2, false, &[])];
+        sort_for_display(&mut memos);
+        let texts: Vec<&str> = memos.iter().map(|memo| memo.text.as_str()).collect();
+        assert_eq!(texts, ["先", "后"]);
+    }
+
+    #[test]
+    fn merge_keeps_local_usage_and_pin() {
+        let source = vec![
+            memo("甲", 1, false, &["新标签"]),
+            memo("乙", 2, true, &[]),
+        ];
+        let local = vec![memo("甲", 9, true, &["旧标签"])];
+
+        let merged = merge(&source, &local);
+
+        assert_eq!(merged[0], memo("甲", 9, true, &["新标签"]));
+        assert_eq!(merged[1], memo("乙", 2, true, &[]));
     }
 
     #[test]
@@ -232,12 +396,12 @@ memos:
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("memos.yaml");
         let memos = vec![
-            "第一行\n第二行".to_owned(),
-            "邮箱：me@example.com".to_owned(),
-            "  保留前导空格".to_owned(),
-            "12345".to_owned(),
-            "true".to_owned(),
-            "null".to_owned(),
+            memo("第一行\n第二行", 2, true, &["工作", "常用"]),
+            memo("邮箱：me@example.com", 0, false, &[]),
+            memo("  保留前导空格", 5, false, &["tag"]),
+            memo("12345", 0, false, &[]),
+            memo("true", 0, false, &[]),
+            memo("null", 0, false, &[]),
         ];
 
         save(&path, &memos).expect("save");
@@ -262,14 +426,30 @@ memos:
     }
 
     #[test]
-    fn matching_indices_are_case_insensitive() {
+    fn matching_indices_match_text_and_tags() {
         let memos = vec![
-            "Hello World".to_owned(),
-            "你好，世界".to_owned(),
-            "hello again".to_owned(),
+            memo("Hello World", 0, false, &["工作"]),
+            memo("你好，世界", 0, false, &[]),
+            memo("hello again", 0, false, &["AI"]),
         ];
         assert_eq!(matching_indices(&memos, "HELLO"), vec![0, 2]);
         assert_eq!(matching_indices(&memos, "世界"), vec![1]);
+        assert_eq!(matching_indices(&memos, "ai"), vec![2]);
         assert_eq!(matching_indices(&memos, "   "), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn display_line_count_accounts_for_wrapping_and_clamps() {
+        assert_eq!(display_line_count("", 3), 1);
+        assert_eq!(display_line_count("一行", 3), 1);
+        assert_eq!(display_line_count("一行\n两行", 3), 2);
+        assert_eq!(display_line_count("一\n二\n三\n四", 3), 3);
+        assert_eq!(display_line_count("一\n\n三", 3), 3);
+
+        assert_eq!(display_line_count(&"a".repeat(48), 3), 1);
+        assert_eq!(display_line_count(&"a".repeat(49), 3), 2);
+        assert_eq!(display_line_count(&"中".repeat(24), 3), 1);
+        assert_eq!(display_line_count(&"中".repeat(25), 3), 2);
+        assert_eq!(display_line_count(&"中".repeat(200), 3), 3);
     }
 }
