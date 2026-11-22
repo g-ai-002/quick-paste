@@ -12,7 +12,7 @@ use gpui_kit::{
     SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions,
     Window, WindowBounds, WindowOptions, div, px, size,
     component::{
-        ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
+        ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _,
         button::{Button, ButtonVariants},
         h_flex,
         input::{Input, InputEvent, InputState},

@@ -7,7 +7,7 @@ use std::{
 };
 
 use gpui_kit::{
-    Anchor, AnyElement, AppContext as _, ClickEvent, ClipboardItem, Context, Entity,
+    Anchor, AnyElement, App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity,
     Focusable as _, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
     Pixels, Render, ScrollEvent, SharedString, Size, StatefulInteractiveElement as _, Styled as _,
     StyleRefinement, Subscription, Window, div, point, px, size,
