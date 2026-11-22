@@ -21,7 +21,7 @@ mod imp {
     const MIN_HIDDEN_TRIM_DELAY_SECS: u64 = 10;
     const MAX_HIDDEN_TRIM_DELAY_SECS: u64 = 30;
     const IDLE_TIMEOUT_SECS: u64 = 3600;
-    const PRIVATE_WORKING_SET_LIMIT: usize = 30 * 1024 * 1024;
+    const PRIVATE_WORKING_SET_LIMIT: usize = 10 * 1024 * 1024;
 
     enum Command {
         Schedule,
