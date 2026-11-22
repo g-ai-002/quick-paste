@@ -266,6 +266,7 @@ impl MemoApp {
             .pb_2()
             .child(
                 v_flex()
+                    .id(("memo-card", index))
                     .relative()
                     .w_full()
                     .h(px(card_height))
