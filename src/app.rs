@@ -46,6 +46,7 @@ impl HotkeyStatus {
 #[derive(Clone)]
 struct AppPaths {
     data_dir: PathBuf,
+    source: PathBuf,
     memos: PathBuf,
     crash_log: PathBuf,
     runtime_dir: PathBuf,
@@ -54,8 +55,13 @@ struct AppPaths {
 impl AppPaths {
     fn discover() -> Self {
         let data_dir = memo::data_directory();
+        let memos = data_dir.join("memos.yaml");
+        let source = memo::external_source_path()
+            .filter(|path| path.as_path() != memos.as_path())
+            .unwrap_or_else(|| memos.clone());
         Self {
-            memos: data_dir.join("memos.yaml"),
+            source,
+            memos,
             crash_log: data_dir.join("crash.log"),
             runtime_dir: data_dir.join("runtime"),
             data_dir,
@@ -95,6 +101,7 @@ pub fn run() {
 
     paste::start_foreground_tracker();
 
+    let source_path = paths.source.clone();
     let memos_path = paths.memos.clone();
 
     gpui_kit::application()
@@ -107,7 +114,13 @@ pub fn run() {
             let options = window_options(cx);
             let (_, view) = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| {
-                    MemoApp::new(window, cx, memos_path.clone(), hotkey_status.clone())
+                    MemoApp::new(
+                        window,
+                        cx,
+                        source_path.clone(),
+                        memos_path.clone(),
+                        hotkey_status.clone(),
+                    )
                 })
             })
             .unwrap_or_else(|error| panic!("无法创建主窗口：{error}"));

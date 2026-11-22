@@ -1,6 +1,9 @@
 mod smooth_scroll;
 
-use std::{path::PathBuf, rc::Rc};
+use std::{
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use gpui_kit::{
     AnyElement, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, Focusable as _,
@@ -8,11 +11,11 @@ use gpui_kit::{
     ScrollEvent, SharedString, Size, StatefulInteractiveElement as _, Styled as _, Subscription,
     Window, div, point, px, size,
     component::{
-        ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, VirtualListScrollHandle,
-        WindowExt as _,
-        button::{Button, ButtonVariant, ButtonVariants},
+        ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
+        VirtualListScrollHandle, WindowExt as _,
+        button::{Button, ButtonVariants},
         h_flex,
-        input::{Input, InputEvent, InputState, Textarea, TextareaState},
+        input::{Input, InputEvent, InputState},
         scroll::Scrollbar,
         v_flex, v_virtual_list,
     },
@@ -22,11 +25,18 @@ use gpui_kit::{
 use self::smooth_scroll::SmoothScroll;
 use crate::{app::HotkeyStatus, memo, paste};
 
-const ROW_HEIGHT: f32 = 92.0;
+const MAX_TEXT_LINES: usize = 3;
+const ROW_LINE_HEIGHT: f32 = 22.0;
+const ROW_TAG_HEIGHT: f32 = 20.0;
+const ROW_PADDING_Y: f32 = 12.0;
+const ROW_CONTENT_GAP: f32 = 4.0;
+const ROW_BORDER: f32 = 2.0;
+const ROW_GAP: f32 = 8.0;
 
 pub struct MemoApp {
+    source_path: PathBuf,
     data_path: PathBuf,
-    memos: Vec<SharedString>,
+    memos: Vec<memo::Memo>,
     filtered: Rc<Vec<usize>>,
     row_sizes: Rc<Vec<Size<Pixels>>>,
     list_scroll: VirtualListScrollHandle,
@@ -34,22 +44,16 @@ pub struct MemoApp {
     search: Entity<InputState>,
     filter: String,
     selected: Option<usize>,
-    editor: Option<MemoEditor>,
     notice: Option<SharedString>,
     hotkey: HotkeyStatus,
     _subscriptions: Vec<Subscription>,
-}
-
-struct MemoEditor {
-    index: Option<usize>,
-    input: Entity<TextareaState>,
-    error: Option<SharedString>,
 }
 
 impl MemoApp {
     pub fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
+        source_path: PathBuf,
         data_path: PathBuf,
         hotkey: HotkeyStatus,
     ) -> Self {
@@ -68,9 +72,7 @@ impl MemoApp {
                 InputEvent::PressEnter { .. } => {
                     this.filter = state.read(cx).value().to_string();
                     this.refresh_filter();
-                    if this.editor.is_none()
-                        && let Some(index) = this.filtered.first().copied()
-                    {
+                    if let Some(index) = this.filtered.first().copied() {
                         this.paste_index(index, window, cx);
                     }
                 }
@@ -78,22 +80,21 @@ impl MemoApp {
             },
         );
 
-        let mut notice = None;
-        let memos = match memo::load_or_create(&data_path) {
-            Ok(memos) => memos
-                .into_iter()
-                .map(SharedString::from)
-                .collect::<Vec<_>>(),
+        let mut notice: Option<SharedString> = None;
+        let memos = match Self::load_merged(&source_path, &data_path) {
+            Ok(memos) => {
+                if let Err(error) = memo::save(&data_path, &memos) {
+                    notice = Some(format!("无法写入本地状态：{error}").into());
+                }
+                memos
+            }
             Err(error) => {
                 notice = Some(format!("无法读取备忘录：{error}").into());
                 Vec::new()
             }
         };
         let filtered = Rc::new(memo::matching_indices(&memos, ""));
-        let row_sizes = Rc::new(vec![
-            size(px(0.0), px(ROW_HEIGHT));
-            filtered.len()
-        ]);
+        let row_sizes = Rc::new(Self::compute_row_sizes(&memos, filtered.as_slice()));
 
         window.on_window_should_close(cx, |window, _cx| {
             paste::hide_window(window);
@@ -101,6 +102,7 @@ impl MemoApp {
         });
 
         let app = Self {
+            source_path,
             data_path,
             memos,
             filtered,
@@ -110,7 +112,6 @@ impl MemoApp {
             search,
             filter: String::new(),
             selected: None,
-            editor: None,
             notice,
             hotkey,
             _subscriptions: vec![subscription],
@@ -141,7 +142,6 @@ impl MemoApp {
 
         h_flex()
             .w_full()
-            .gap_2()
             .px_3()
             .py_3()
             .border_b_1()
@@ -156,69 +156,6 @@ impl MemoApp {
                             .prefix(Icon::new(IconName::Search).small()),
                     ),
             )
-            .child(
-                Button::new("new-memo")
-                    .primary()
-                    .small()
-                    .icon(IconName::Plus)
-                    .label("新建")
-                    .on_click(cx.listener(Self::new_memo)),
-            )
-            .into_any_element()
-    }
-
-    fn render_editor(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(editor) = self.editor.as_ref() else {
-            return div().into_any_element();
-        };
-
-        let danger = cx.theme().danger;
-        let muted = cx.theme().muted;
-        let border = cx.theme().border;
-
-        v_flex()
-            .w_full()
-            .gap_2()
-            .px_3()
-            .py_3()
-            .bg(muted)
-            .border_b_1()
-            .border_color(border)
-            .child(
-                div()
-                    .text_sm()
-                    .font_semibold()
-                    .child(if editor.index.is_some() {
-                        "编辑备忘录"
-                    } else {
-                        "新建备忘录"
-                    }),
-            )
-            .child(Textarea::new(&editor.input))
-            .children(
-                editor
-                    .error
-                    .clone()
-                    .map(|error| div().text_xs().text_color(danger).child(error)),
-            )
-            .child(
-                h_flex()
-                    .justify_end()
-                    .gap_2()
-                    .child(
-                        Button::new("cancel-editor")
-                            .small()
-                            .label("取消")
-                            .on_click(cx.listener(Self::cancel_editor)),
-                    )
-                    .child(
-                        Button::new("save-editor")
-                            .small()
-                            .primary()
-                            .label("保存")
-                            .on_click(cx.listener(Self::save_clicked)),
-                    ),
-            )
             .into_any_element()
     }
 
@@ -228,7 +165,7 @@ impl MemoApp {
                 render_empty_state(
                     IconName::FileText,
                     "还没有备忘录",
-                    "点击「新建」添加一条纯文本，双击条目即可粘贴",
+                    "在内容源 memos.yaml 中添加记录，再点「重新加载」",
                     cx,
                 )
             } else {
@@ -269,7 +206,13 @@ impl MemoApp {
         .min_h_0()
         .w_full();
 
-        let scroll_size = size(px(0.0), px(ROW_HEIGHT * self.filtered.len() as f32));
+        let scroll_height: f32 = self
+            .filtered
+            .iter()
+            .filter_map(|index| self.memos.get(*index))
+            .map(Self::row_height)
+            .sum();
+        let scroll_size = size(px(0.0), px(scroll_height));
 
         div()
             .id("memo-list-scroll")
@@ -280,6 +223,7 @@ impl MemoApp {
             .min_h_0()
             .w_full()
             .overflow_hidden()
+            .pt_2()
             .on_scroll(cx.listener(Self::on_list_scroll))
             .child(list)
             .child(Scrollbar::vertical(&self.list_scroll).scroll_size(scroll_size))
@@ -287,82 +231,93 @@ impl MemoApp {
     }
 
     fn render_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(text) = self.memos.get(index).cloned() else {
+        let Some(memo) = self.memos.get(index) else {
             return div().into_any_element();
         };
+
+        let text = SharedString::from(memo.text.clone());
+        let tags: Option<SharedString> = if memo.tags.is_empty() {
+            None
+        } else {
+            Some(SharedString::from(
+                memo.tags
+                    .iter()
+                    .map(|tag| format!("#{tag}"))
+                    .collect::<Vec<_>>()
+                    .join("  "),
+            ))
+        };
+        let line_count = memo::display_line_count(text.as_ref(), MAX_TEXT_LINES);
+        let pinned = memo.is_pinned;
+        let row_height = Self::row_height(memo);
+        let card_height = row_height - ROW_GAP;
 
         let selected = self.selected == Some(index);
         let selected_bg = cx.theme().muted;
         let hover_bg = cx.theme().muted;
+        let border = cx.theme().border;
         let muted_foreground = cx.theme().muted_foreground;
-        let danger = cx.theme().danger;
 
-        h_flex()
+        v_flex()
             .id(("memo-row", index))
             .w_full()
-            .h(px(ROW_HEIGHT))
-            .items_start()
-            .gap_3()
-            .overflow_hidden()
-            .rounded_md()
-            .pl_3()
-            .pr_5()
-            .py_3()
-            .when(selected, |this| this.bg(selected_bg))
-            .hover(move |this| this.bg(hover_bg))
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                if event.click_count() == 2 {
-                    this.paste_index(index, window, cx);
-                } else {
-                    this.selected = Some(index);
-                    cx.notify();
-                }
-            }))
+            .h(px(row_height))
+            .px_2()
+            .pb_2()
             .child(
                 v_flex()
-                    .flex_1()
-                    .min_w_0()
+                    .relative()
+                    .w_full()
+                    .h(px(card_height))
                     .gap_1()
-                    .child(div().line_clamp(2).text_sm().child(text))
+                    .overflow_hidden()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(border)
+                    .bg(cx.theme().background)
+                    .px_3()
+                    .py_3()
+                    .when(selected, |this| this.bg(selected_bg))
+                    .hover(move |this| this.bg(hover_bg))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        if event.click_count() == 2 {
+                            this.paste_index(index, window, cx);
+                        } else {
+                            this.selected = Some(index);
+                            cx.notify();
+                        }
+                    }))
                     .child(
                         div()
+                            .w_full()
+                            .line_clamp(line_count)
+                            .text_sm()
+                            .when(selected, |this| this.pr(px(80.0)))
+                            .child(text),
+                    )
+                    .children(tags.map(|tags| {
+                        div()
+                            .w_full()
+                            .truncate()
                             .text_xs()
                             .text_color(muted_foreground)
-                            .child("双击粘贴"),
-                    ),
+                            .when(selected, |this| this.pr(px(80.0)))
+                            .child(tags)
+                    }))
+                    .children(selected.then(|| {
+                        div().absolute().top(px(8.0)).right(px(8.0)).child(
+                            Button::new(("memo-pin", index))
+                                .ghost()
+                                .xsmall()
+                                .label(if pinned { "取消置顶" } else { "置顶" })
+                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.toggle_pin(index, cx);
+                                })),
+                        )
+                    })),
             )
-            .children(selected.then(|| {
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .child(
-                        Button::new(("memo-edit", index))
-                            .ghost()
-                            .xsmall()
-                            .label("编辑")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                let text = this
-                                    .memos
-                                    .get(index)
-                                    .map(|text| text.to_string())
-                                    .unwrap_or_default();
-                                this.open_editor(Some(index), text, window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new(("memo-delete", index))
-                            .ghost()
-                            .xsmall()
-                            .label("删除")
-                            .text_color(danger)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.confirm_delete(index, window, cx);
-                            })),
-                    )
-            }))
             .into_any_element()
     }
 
@@ -455,112 +410,25 @@ impl MemoApp {
         }
     }
 
-    fn new_memo(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_editor(None, String::new(), window, cx);
-    }
-
-    fn open_editor(
-        &mut self,
-        index: Option<usize>,
-        text: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let input = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .default_value(text)
-                .auto_grow(3, 8)
-                .placeholder("输入要保存的纯文本…")
-        });
-        input.focus_handle(cx).focus(window, cx);
-        self.editor = Some(MemoEditor {
-            index,
-            input,
-            error: None,
-        });
-        cx.notify();
-    }
-
-    fn cancel_editor(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_editor(window, cx);
-    }
-
-    fn close_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.editor = None;
-        self.focus_search(window, cx);
-        cx.notify();
-    }
-
-    fn save_clicked(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.commit_editor(window, cx);
-    }
-
-    fn commit_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (index, raw) = match self.editor.as_ref() {
-            Some(editor) => (editor.index, editor.input.read(cx).value().to_string()),
-            None => return,
-        };
-        let text = raw.trim_end().to_string();
-
-        if text.trim().is_empty() {
-            if let Some(editor) = self.editor.as_mut() {
-                editor.error = Some("内容不能为空".into());
-            }
-            cx.notify();
-            return;
-        }
-
-        let mut next = self.memos.clone();
-        let selected = match index {
-            Some(index) if index < next.len() => {
-                next[index] = text.into();
-                index
-            }
-            Some(_) => {
-                self.editor = None;
-                self.focus_search(window, cx);
-                cx.notify();
-                return;
-            }
-            None => {
-                next.insert(0, text.into());
-                0
-            }
-        };
-
-        let strings: Vec<String> = next.iter().map(|text| text.to_string()).collect();
-        match memo::save(&self.data_path, &strings) {
-            Ok(()) => {
-                self.memos = next;
-                self.selected = Some(selected);
-                self.editor = None;
-                self.notice = None;
-                self.refresh_filter();
-                self.focus_search(window, cx);
-            }
-            Err(error) => {
-                let message: SharedString = format!("保存失败：{error}").into();
-                self.notice = Some(message.clone());
-                if let Some(editor) = self.editor.as_mut() {
-                    editor.error = Some(message);
-                }
-            }
-        }
-        cx.notify();
-    }
-
     fn reload_clicked(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.reload(cx);
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
-        match memo::load_or_create(&self.data_path) {
+        match Self::load_merged(&self.source_path, &self.data_path) {
             Ok(memos) => {
-                self.memos = memos.into_iter().map(SharedString::from).collect();
-                self.notice = None;
-                if self.selected.is_some_and(|index| index >= self.memos.len()) {
-                    self.selected = None;
-                }
+                let selected_text = self
+                    .selected
+                    .and_then(|index| self.memos.get(index))
+                    .map(|memo| memo.text.clone());
+                let save_error = memo::save(&self.data_path, &memos).err();
+
+                self.memos = memos;
+                self.selected = selected_text
+                    .and_then(|text| self.memos.iter().position(|memo| memo.text == text));
+                self.notice = save_error.map(|error| {
+                    SharedString::from(format!("已重新加载，但写入本地状态失败：{error}"))
+                });
                 self.refresh_filter();
             }
             Err(error) => {
@@ -577,82 +445,41 @@ impl MemoApp {
         }
     }
 
-    fn confirm_delete(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(text) = self.memos.get(index) else {
+    fn toggle_pin(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(memo) = self.memos.get(index) else {
             return;
         };
-        let preview = preview_text(text.as_ref(), 80);
-        let entity = cx.entity();
-
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let entity = entity.clone();
-            alert
-                .title("删除这条备忘录？")
-                .description(preview.clone())
-                .confirm()
-                .ok_text("删除")
-                .ok_variant(ButtonVariant::Danger)
-                .on_ok(move |_, _, cx| {
-                    entity.update(cx, |this, cx| this.delete_index(index, cx));
-                    true
-                })
-        });
-    }
-
-    fn delete_index(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.memos.len() {
-            return;
-        }
+        let text = memo.text.clone();
+        let pinned = !memo.is_pinned;
 
         let mut next = self.memos.clone();
-        next.remove(index);
+        next[index].is_pinned = pinned;
+        memo::sort_for_display(&mut next);
 
-        let strings: Vec<String> = next.iter().map(|text| text.to_string()).collect();
-        match memo::save(&self.data_path, &strings) {
+        match memo::save(&self.data_path, &next) {
             Ok(()) => {
                 self.memos = next;
+                self.selected = self.memos.iter().position(|memo| memo.text == text);
                 self.notice = None;
-                if self.selected == Some(index) {
-                    self.selected = None;
-                } else if self.selected.is_some_and(|selected| selected > index) {
-                    self.selected = self.selected.map(|selected| selected - 1);
-                }
-
-                let mut close_editor = false;
-                if let Some(editor) = self.editor.as_mut() {
-                    match editor.index {
-                        Some(editing) if editing == index => close_editor = true,
-                        Some(editing) if editing > index => {
-                            editor.index = Some(editing - 1);
-                        }
-                        _ => {}
-                    }
-                }
-                if close_editor {
-                    self.editor = None;
-                }
                 self.refresh_filter();
+                if pinned {
+                    self.scroll_to_top();
+                }
             }
             Err(error) => {
-                self.notice = Some(format!("删除失败：{error}").into());
+                self.notice = Some(format!("保存失败：{error}").into());
             }
         }
         cx.notify();
     }
 
     fn paste_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = self.memos.get(index).cloned() else {
+        let Some(text) = self.memos.get(index).map(|memo| memo.text.clone()) else {
             return;
         };
         if text.trim().is_empty() {
             return;
         }
-        let text = text.to_string();
 
         cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
         let copied = cx
@@ -661,6 +488,12 @@ impl MemoApp {
             .is_some_and(|value| value == text);
         if !copied {
             self.notice = Some("写入剪贴板失败，请重试".into());
+            cx.notify();
+            return;
+        }
+
+        if let Err(error) = self.record_usage(index) {
+            self.notice = Some(format!("记录使用次数失败：{error}").into());
             cx.notify();
             return;
         }
@@ -674,6 +507,23 @@ impl MemoApp {
         }
     }
 
+    fn record_usage(&mut self, index: usize) -> Result<(), memo::MemoError> {
+        let Some(memo) = self.memos.get(index) else {
+            return Ok(());
+        };
+        let text = memo.text.clone();
+
+        let mut next = self.memos.clone();
+        next[index].usage_count = next[index].usage_count.saturating_add(1);
+        memo::sort_for_display(&mut next);
+        memo::save(&self.data_path, &next)?;
+
+        self.memos = next;
+        self.selected = self.memos.iter().position(|memo| memo.text == text);
+        self.refresh_filter();
+        Ok(())
+    }
+
     fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.search.focus_handle(cx).focus(window, cx);
     }
@@ -681,11 +531,9 @@ impl MemoApp {
     /// 重新计算过滤结果与行高缓存；备忘录或过滤词变化后必须调用。
     fn refresh_filter(&mut self) {
         self.smooth_scroll.reset();
-        self.filtered = Rc::new(memo::matching_indices(&self.memos, &self.filter));
-        self.row_sizes = Rc::new(vec![
-            size(px(0.0), px(ROW_HEIGHT));
-            self.filtered.len()
-        ]);
+        let filtered = memo::matching_indices(&self.memos, &self.filter);
+        self.row_sizes = Rc::new(Self::compute_row_sizes(&self.memos, filtered.as_slice()));
+        self.filtered = Rc::new(filtered);
     }
 
     fn scroll_to_top(&mut self) {
@@ -702,9 +550,7 @@ impl MemoApp {
         let modifiers = event.keystroke.modifiers;
 
         if key == "escape" {
-            if self.editor.is_some() {
-                self.close_editor(window, cx);
-            } else if !self.filter.is_empty() {
+            if !self.filter.is_empty() {
                 self.filter.clear();
                 self.search
                     .update(cx, |state, cx| state.set_value("", window, cx));
@@ -715,21 +561,43 @@ impl MemoApp {
                 paste::hide_window(window);
             }
             cx.stop_propagation();
-        } else if modifiers.control && !modifiers.alt && !modifiers.shift && key == "n" {
-            self.open_editor(None, String::new(), window, cx);
-            cx.stop_propagation();
         } else if modifiers.control && !modifiers.alt && !modifiers.shift && key == "f" {
             self.focus_search(window, cx);
             cx.stop_propagation();
-        } else if modifiers.control
-            && !modifiers.alt
-            && !modifiers.shift
-            && key == "enter"
-            && self.editor.is_some()
-        {
-            self.commit_editor(window, cx);
-            cx.stop_propagation();
         }
+    }
+
+    fn load_merged(
+        source_path: &Path,
+        data_path: &Path,
+    ) -> Result<Vec<memo::Memo>, memo::MemoError> {
+        let mut memos = if source_path != data_path && source_path.exists() {
+            let source = memo::load(source_path)?;
+            let local = memo::load_or_create(data_path)?;
+            memo::merge(&source, &local)
+        } else {
+            memo::load_or_create(data_path)?
+        };
+        memo::sort_for_display(&mut memos);
+        Ok(memos)
+    }
+
+    fn compute_row_sizes(memos: &[memo::Memo], filtered: &[usize]) -> Vec<Size<Pixels>> {
+        filtered
+            .iter()
+            .filter_map(|index| memos.get(*index))
+            .map(|memo| size(px(0.0), px(Self::row_height(memo))))
+            .collect()
+    }
+
+    fn row_height(memo: &memo::Memo) -> f32 {
+        let lines = memo::display_line_count(&memo.text, MAX_TEXT_LINES) as f32;
+        let tags = if memo.tags.is_empty() {
+            0.0
+        } else {
+            ROW_CONTENT_GAP + ROW_TAG_HEIGHT
+        };
+        ROW_PADDING_Y * 2.0 + lines * ROW_LINE_HEIGHT + tags + ROW_BORDER + ROW_GAP
     }
 }
 
@@ -749,10 +617,6 @@ impl Render for MemoApp {
         self.smooth_scroll.advance(&self.list_scroll, window);
 
         let toolbar = self.render_toolbar(cx);
-        let editor = self
-            .editor
-            .as_ref()
-            .map(|_| self.render_editor(cx));
         let list = self.render_list(cx);
         let footer = self.render_footer(cx);
 
@@ -762,7 +626,6 @@ impl Render for MemoApp {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(toolbar)
-            .children(editor)
             .child(list)
             .child(footer)
             .on_key_down(cx.listener(Self::on_key_down))
@@ -793,13 +656,4 @@ fn render_empty_state(
                 .child(hint),
         )
         .into_any_element()
-}
-
-fn preview_text(text: &str, limit: usize) -> String {
-    let mut chars = text.chars();
-    let mut preview: String = chars.by_ref().take(limit).collect();
-    if chars.next().is_some() {
-        preview.push('…');
-    }
-    preview
 }
