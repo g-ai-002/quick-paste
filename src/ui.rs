@@ -7,12 +7,13 @@ use std::{
 };
 
 use gpui_kit::{
-    AnyElement, App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity,
-    Focusable as _, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    Pixels, Render, ScrollEvent, SharedString, Size,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, point, px, size,
+    AnyElement, App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, FocusHandle,
+    Focusable as _, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
+    ParentElement as _, Pixels, Render, ScrollEvent, SharedString, Size,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, WindowControlArea, div,
+    point, px, size,
     component::{
-        ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
+        ActiveTheme as _, Icon, IconName, Sizable as _, Size as ComponentSize, StyledExt as _,
         VirtualListScrollHandle, WindowExt as _,
         button::{Button, ButtonVariants},
         h_flex,
@@ -35,7 +36,7 @@ const ROW_PADDING_X: f32 = 12.0;
 const ROW_PADDING_Y: f32 = 12.0;
 const ROW_CONTENT_GAP: f32 = 4.0;
 const ROW_GAP: f32 = 8.0;
-const PIN_SIZE: f32 = 32.0;
+const PIN_SIZE: f32 = 28.0;
 const PIN_INSET: f32 = 6.0;
 const ROW_TEXT_RIGHT: f32 = PIN_SIZE + PIN_INSET + 6.0;
 const TAG_ROW_HEIGHT: f32 = 30.0;
@@ -55,6 +56,7 @@ pub struct MemoApp {
     list_scroll: VirtualListScrollHandle,
     smooth_scroll: SmoothScroll,
     search: Entity<InputState>,
+    focus_handle: FocusHandle,
     filter: String,
     hovered: Option<usize>,
     notice: Option<SharedString>,
@@ -79,6 +81,7 @@ impl MemoApp {
         let app_settings = settings::current(cx);
         let content_source = source::ContentSource::resolve(&data_source, &data_path);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索备忘录…"));
+        let focus_handle = cx.focus_handle();
 
         let subscription = cx.subscribe_in(
             &search,
@@ -207,6 +210,7 @@ impl MemoApp {
             list_scroll: VirtualListScrollHandle::new(),
             smooth_scroll: SmoothScroll::default(),
             search,
+            focus_handle,
             filter: String::new(),
             hovered: None,
             notice,
@@ -228,7 +232,7 @@ impl MemoApp {
         if let Some(hwnd) = paste::window_hwnd(window) {
             paste::set_main_window(hwnd);
         }
-        app.search.focus_handle(cx).focus(window, cx);
+        app.focus_handle.focus(window, cx);
         app
     }
 
@@ -421,21 +425,48 @@ impl MemoApp {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let border = cx.theme().border;
 
-        h_flex()
+        v_flex()
             .w_full()
-            .px_3()
-            .py_3()
             .border_b_1()
             .border_color(border)
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
+                    .w_full()
+                    .h(px(12.0))
+                    .window_control_area(WindowControlArea::Drag),
+            )
+            .child(
+                h_flex()
+                    .w_full()
                     .child(
-                        Input::new(&self.search)
-                            .cleanable(true)
-                            .prefix(Icon::new(IconName::Search).small()),
+                        div()
+                            .w(px(12.0))
+                            .self_stretch()
+                            .window_control_area(WindowControlArea::Drag),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(
+                                Input::new(&self.search)
+                                    .cleanable(true)
+                                    .prefix(Icon::new(IconName::Search).small()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(12.0))
+                            .self_stretch()
+                            .window_control_area(WindowControlArea::Drag),
                     ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .h(px(12.0))
+                    .window_control_area(WindowControlArea::Drag),
             )
             .into_any_element()
     }
@@ -464,13 +495,19 @@ impl MemoApp {
             .child(
                 v_flex()
                     .id("tag-list-scroll")
-                    .flex_1()
                     .min_h_0()
                     .w_full()
                     .gap_1()
                     .p_2()
                     .overflow_y_scroll()
                     .children(items),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .ml(px(8.0))
+                    .window_control_area(WindowControlArea::Drag),
             )
             .into_any_element()
     }
@@ -726,7 +763,7 @@ impl MemoApp {
                         } else {
                             IconName::Star
                         })
-                        .large()
+                        .with_size(ComponentSize::Medium)
                         .text_color(primary),
                     )
             }));
@@ -803,6 +840,7 @@ impl MemoApp {
                             .truncate()
                             .text_xs()
                             .text_color(muted_foreground)
+                            .window_control_area(WindowControlArea::Drag)
                             .child(hint),
                     )
                     .child(
@@ -1283,6 +1321,10 @@ impl Render for MemoApp {
             .size_full()
             .bg(cx.theme().muted)
             .text_color(cx.theme().foreground)
+            .track_focus(&self.focus_handle)
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                this.focus_handle.focus(window, cx);
+            }))
             .child(toolbar)
             .child(
                 h_flex()
