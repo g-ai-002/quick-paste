@@ -113,7 +113,7 @@ impl Default for Settings {
             start_hidden: false,
             auto_hide_on_blur: true,
             hover_preview: true,
-            hover_preview_delay_ms: 400,
+            hover_preview_delay_ms: 100,
             max_text_lines: 3,
             theme: ThemeChoice::System,
             card_radius: 6.0,
@@ -131,7 +131,7 @@ impl Default for Settings {
 
 impl Settings {
     pub fn normalized(mut self) -> Self {
-        self.hover_preview_delay_ms = self.hover_preview_delay_ms.clamp(200, 1_200);
+        self.hover_preview_delay_ms = self.hover_preview_delay_ms.clamp(0, 400);
         self.max_text_lines = self.max_text_lines.clamp(2, 5);
         self.card_radius = self.card_radius.clamp(0.0, 24.0);
         self.tag_sidebar_width = self
@@ -246,6 +246,7 @@ mod tests {
         assert!(settings.show_on_cursor_display);
         assert!(settings.auto_hide_on_blur);
         assert!(settings.hover_preview);
+        assert_eq!(settings.hover_preview_delay_ms, 100);
         assert_eq!(settings.max_text_lines, 3);
         assert_eq!(settings.theme, ThemeChoice::System);
         assert_eq!(settings.tag_sidebar_width, TAG_SIDEBAR_WIDTH_DEFAULT);
@@ -256,7 +257,7 @@ mod tests {
     #[test]
     fn normalizes_out_of_range_values() {
         let settings = Settings {
-            hover_preview_delay_ms: 10,
+            hover_preview_delay_ms: 9_999,
             max_text_lines: 99,
             card_radius: -8.0,
             tag_sidebar_width: 999.0,
@@ -264,10 +265,17 @@ mod tests {
         }
         .normalized();
 
-        assert_eq!(settings.hover_preview_delay_ms, 200);
+        assert_eq!(settings.hover_preview_delay_ms, 400);
         assert_eq!(settings.max_text_lines, 5);
         assert_eq!(settings.card_radius, 0.0);
         assert_eq!(settings.tag_sidebar_width, TAG_SIDEBAR_WIDTH_MAX);
+
+        let settings = Settings {
+            hover_preview_delay_ms: 0,
+            ..Settings::default()
+        }
+        .normalized();
+        assert_eq!(settings.hover_preview_delay_ms, 0);
 
         let settings = Settings {
             tag_sidebar_width: 10.0,
@@ -284,7 +292,7 @@ mod tests {
         let settings = Settings {
             show_on_cursor_display: false,
             start_hidden: true,
-            hover_preview_delay_ms: 800,
+            hover_preview_delay_ms: 300,
             max_text_lines: 5,
             theme: ThemeChoice::Dark,
             card_radius: 10.0,

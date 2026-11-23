@@ -147,7 +147,7 @@ const SETTING_META: &[SettingMeta] = &[
         id: "hover_preview_delay_ms",
         page: SettingsPage::Preview,
         title: "悬停停留时间",
-        description: "鼠标停留多久后显示完整内容预览。",
+        description: "鼠标停留多久后显示完整内容预览；0 秒表示立即显示。",
         keywords: &["延迟", "停留", "时间"],
     },
     SettingMeta {
@@ -1012,11 +1012,11 @@ impl SettingsWindow {
         rows.push(self.setting_row(meta("hover_preview"), control, cx));
 
         let delays = [
-            (200_u64, "0.2 秒"),
+            (0_u64, "0 秒"),
+            (100, "0.1 秒"),
+            (200, "0.2 秒"),
+            (300, "0.3 秒"),
             (400, "0.4 秒"),
-            (600, "0.6 秒"),
-            (800, "0.8 秒"),
-            (1_200, "1.2 秒"),
         ];
         let control = self.segmented(
             "preview-delay",
