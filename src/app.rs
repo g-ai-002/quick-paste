@@ -7,7 +7,7 @@ use std::{
 
 use async_channel::Receiver;
 use gpui_kit::{
-    App, AppContext as _, Entity, Global, TitlebarOptions, WindowBounds, WindowOptions, px, size,
+    App, AppContext as _, Entity, Global, WindowBounds, WindowOptions, px, size,
 };
 
 use crate::{
@@ -129,7 +129,7 @@ pub fn run() {
             cx.set_global(InstanceGuard(instance));
 
             let hotkey_receiver = hotkey::install(cx, initial_settings.hotkey.clone());
-            let options = window_options(cx);
+            let options = window_options(cx, &initial_settings);
             let (_, view) = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| {
                     MemoApp::new(
@@ -158,14 +158,17 @@ pub fn run() {
         });
 }
 
-fn window_options(cx: &mut App) -> WindowOptions {
+fn window_options(cx: &mut App, settings: &settings::Settings) -> WindowOptions {
     WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(600.0), px(640.0)), cx)),
-        titlebar: Some(TitlebarOptions {
-            title: Some("快速粘贴".into()),
-            ..Default::default()
-        }),
-        window_min_size: Some(size(px(540.0), px(520.0))),
+        window_bounds: Some(WindowBounds::centered(
+            size(px(settings.window_width), px(settings.window_height)),
+            cx,
+        )),
+        titlebar: None,
+        window_min_size: Some(size(
+            px(settings::WINDOW_WIDTH_MIN),
+            px(settings::WINDOW_HEIGHT_MIN),
+        )),
         app_id: Some("com.g-ai-002.quick-paste".to_owned()),
         ..Default::default()
     }

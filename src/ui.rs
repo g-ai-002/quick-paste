@@ -64,6 +64,8 @@ pub struct MemoApp {
     loading: bool,
     pending_reload: bool,
     load_generation: u64,
+    pending_window_size: Option<(f32, f32)>,
+    window_size_generation: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -156,6 +158,7 @@ impl MemoApp {
         ));
 
         window.on_window_should_close(cx, |window, cx| {
+            save_window_size(window, cx);
             preview::hide(cx);
             paste::hide_window(window);
             false
@@ -166,6 +169,8 @@ impl MemoApp {
             let was_active = this.window_active;
             this.window_active = active;
             if was_active && !active {
+                this.remember_window_size(window);
+                this.commit_window_size(cx);
                 this.cancel_preview(cx);
                 let suppress = this
                     .suppress_blur_until
@@ -179,6 +184,9 @@ impl MemoApp {
                 }
             }
             cx.notify();
+        });
+        let bounds_subscription = cx.observe_window_bounds(window, |this, window, cx| {
+            this.on_window_resized(window, cx);
         });
         let appearance_subscription = cx.observe_window_appearance(window, |_, _window, cx| {
             if settings::current(cx).theme == settings::ThemeChoice::System {
@@ -208,9 +216,12 @@ impl MemoApp {
             loading,
             pending_reload,
             load_generation: 0,
+            pending_window_size: None,
+            window_size_generation: 0,
             _subscriptions: vec![
                 subscription,
                 activation_subscription,
+                bounds_subscription,
                 appearance_subscription,
             ],
         };
@@ -223,6 +234,7 @@ impl MemoApp {
 
     pub fn on_hotkey(&mut self, cx: &mut Context<Self>) {
         if paste::is_main_window_foreground() {
+            self.commit_window_size(cx);
             self.window_active = false;
             self.cancel_preview(cx);
             paste::hide_main_window();
@@ -232,6 +244,7 @@ impl MemoApp {
     }
 
     pub fn on_show_request(&mut self, cx: &mut Context<Self>) {
+        self.commit_window_size(cx);
         self.cancel_preview(cx);
         self.sync_settings(cx);
         if self.settings.theme == settings::ThemeChoice::System {
@@ -816,7 +829,7 @@ impl MemoApp {
                             .ghost()
                             .xsmall()
                             .label("退出")
-                            .on_click(|_, _, cx| cx.quit()),
+                            .on_click(cx.listener(Self::quit)),
                     ),
             )
             .into_any_element()
@@ -970,6 +983,69 @@ impl MemoApp {
             self.notice = Some(format!("无法打开设置：{error}").into());
             cx.notify();
         }
+    }
+
+    fn remember_window_size(&mut self, window: &Window) {
+        let size = window.bounds().size;
+        let width = f32::from(size.width);
+        let height = f32::from(size.height);
+        if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+            return;
+        }
+        if (width - self.settings.window_width).abs() < 1.0
+            && (height - self.settings.window_height).abs() < 1.0
+        {
+            self.pending_window_size = None;
+            return;
+        }
+        self.pending_window_size = Some((width, height));
+    }
+
+    fn on_window_resized(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.remember_window_size(window);
+        if self.pending_window_size.is_none() {
+            return;
+        }
+        self.window_size_generation = self.window_size_generation.wrapping_add(1);
+        let generation = self.window_size_generation;
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.window_size_generation == generation {
+                    this.commit_window_size(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn commit_window_size(&mut self, cx: &mut Context<Self>) {
+        let Some((width, height)) = self.pending_window_size.take() else {
+            return;
+        };
+        self.window_size_generation = self.window_size_generation.wrapping_add(1);
+        if (width - self.settings.window_width).abs() < 1.0
+            && (height - self.settings.window_height).abs() < 1.0
+        {
+            return;
+        }
+        let mut next = settings::current(cx);
+        next.window_width = width;
+        next.window_height = height;
+        let next = next.normalized();
+        match settings::commit(cx, next.clone()) {
+            Ok(()) => self.settings = next,
+            Err(error) => logging::write(format!("保存窗口尺寸失败：{error}")),
+        }
+    }
+
+    fn quit(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.remember_window_size(window);
+        self.commit_window_size(cx);
+        cx.quit();
     }
 
     fn toggle_pin(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1128,6 +1204,8 @@ impl MemoApp {
                 self.scroll_to_top();
                 cx.notify();
             } else {
+                self.remember_window_size(window);
+                self.commit_window_size(cx);
                 paste::hide_window(window);
             }
             cx.stop_propagation();
@@ -1212,6 +1290,27 @@ impl Render for MemoApp {
             )
             .child(footer)
             .on_key_down(cx.listener(Self::on_key_down))
+    }
+}
+
+
+fn save_window_size(window: &Window, cx: &mut App) {
+    let size = window.bounds().size;
+    let width = f32::from(size.width);
+    let height = f32::from(size.height);
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return;
+    }
+    let mut next = settings::current(cx);
+    if (width - next.window_width).abs() < 1.0
+        && (height - next.window_height).abs() < 1.0
+    {
+        return;
+    }
+    next.window_width = width;
+    next.window_height = height;
+    if let Err(error) = settings::commit(cx, next) {
+        logging::write(format!("保存窗口尺寸失败：{error}"));
     }
 }
 

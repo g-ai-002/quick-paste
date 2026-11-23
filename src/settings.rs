@@ -19,7 +19,12 @@ const HEADER: &str = "\
 # 远端数据源的 TOKEN 会以明文保存在本文件。
 ";
 
-pub const TAG_SIDEBAR_WIDTH_DEFAULT: f32 = 128.0;
+pub const SETTINGS_VERSION: u32 = 2;
+pub const WINDOW_WIDTH_DEFAULT: f32 = 800.0;
+pub const WINDOW_HEIGHT_DEFAULT: f32 = 600.0;
+pub const WINDOW_WIDTH_MIN: f32 = 540.0;
+pub const WINDOW_HEIGHT_MIN: f32 = 520.0;
+pub const TAG_SIDEBAR_WIDTH_DEFAULT: f32 = 184.0;
 pub const TAG_SIDEBAR_WIDTH_MIN: f32 = 80.0;
 pub const TAG_SIDEBAR_WIDTH_MAX: f32 = 240.0;
 pub const TAG_SIDEBAR_WIDTH_STEP: f32 = 8.0;
@@ -86,8 +91,15 @@ impl PasteAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// 设置结构版本，用于旧配置的默认值迁移。
+    #[serde(default)]
+    pub settings_version: Option<u32>,
     /// 备忘录内容来自本地文件还是远端仓库。
     pub data_source: DataSourceConfig,
+    /// 主窗口上次的宽度（逻辑像素）。
+    pub window_width: f32,
+    /// 主窗口上次的高度（逻辑像素）。
+    pub window_height: f32,
     /// 唤出窗口时移动到鼠标所在的显示器。
     pub show_on_cursor_display: bool,
     /// 程序启动后不显示主窗口，只驻留后台。
@@ -113,12 +125,15 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            settings_version: None,
             data_source: DataSourceConfig::default(),
+            window_width: WINDOW_WIDTH_DEFAULT,
+            window_height: WINDOW_HEIGHT_DEFAULT,
             show_on_cursor_display: true,
             start_hidden: false,
             auto_hide_on_blur: true,
             hover_preview: true,
-            hover_preview_delay_ms: 100,
+            hover_preview_delay_ms: 0,
             max_text_lines: 3,
             theme: ThemeChoice::System,
             card_radius: 6.0,
@@ -136,7 +151,22 @@ impl Default for Settings {
 
 impl Settings {
     pub fn normalized(mut self) -> Self {
+        self.settings_version = Some(SETTINGS_VERSION);
         self.data_source = self.data_source.normalized();
+        if !self.window_width.is_finite() {
+            self.window_width = WINDOW_WIDTH_DEFAULT;
+        }
+        if !self.window_height.is_finite() {
+            self.window_height = WINDOW_HEIGHT_DEFAULT;
+        }
+        self.window_width = self
+            .window_width
+            .clamp(WINDOW_WIDTH_MIN, 10_000.0)
+            .round();
+        self.window_height = self
+            .window_height
+            .clamp(WINDOW_HEIGHT_MIN, 10_000.0)
+            .round();
         self.hover_preview_delay_ms = self.hover_preview_delay_ms.clamp(0, 400);
         self.max_text_lines = self.max_text_lines.clamp(2, 5);
         self.card_radius = self.card_radius.clamp(0.0, 24.0);
@@ -199,8 +229,17 @@ pub fn load(path: &Path) -> Result<Settings, String> {
     if only_comments {
         return Ok(Settings::default());
     }
-    let settings: Settings = serde_yaml::from_str(content)
+    let mut settings: Settings = serde_yaml::from_str(content)
         .map_err(|error| format!("设置文件格式无效：{error}"))?;
+    if settings.settings_version.is_none() {
+        if (settings.tag_sidebar_width - 128.0).abs() < f32::EPSILON {
+            settings.tag_sidebar_width = TAG_SIDEBAR_WIDTH_DEFAULT;
+        }
+        if settings.hover_preview_delay_ms == 100 {
+            settings.hover_preview_delay_ms = 0;
+        }
+        settings.settings_version = Some(SETTINGS_VERSION);
+    }
     Ok(settings.normalized())
 }
 
@@ -250,10 +289,12 @@ mod tests {
     fn defaults_are_stable() {
         let settings = Settings::default();
         assert_eq!(settings.data_source.kind, crate::source::SourceKind::Local);
+        assert_eq!(settings.window_width, WINDOW_WIDTH_DEFAULT);
+        assert_eq!(settings.window_height, WINDOW_HEIGHT_DEFAULT);
         assert!(settings.show_on_cursor_display);
         assert!(settings.auto_hide_on_blur);
         assert!(settings.hover_preview);
-        assert_eq!(settings.hover_preview_delay_ms, 100);
+        assert_eq!(settings.hover_preview_delay_ms, 0);
         assert_eq!(settings.max_text_lines, 3);
         assert_eq!(settings.theme, ThemeChoice::System);
         assert_eq!(settings.tag_sidebar_width, TAG_SIDEBAR_WIDTH_DEFAULT);
@@ -264,6 +305,8 @@ mod tests {
     #[test]
     fn normalizes_out_of_range_values() {
         let settings = Settings {
+            window_width: 0.0,
+            window_height: 0.0,
             hover_preview_delay_ms: 9_999,
             max_text_lines: 99,
             card_radius: -8.0,
@@ -272,6 +315,8 @@ mod tests {
         }
         .normalized();
 
+        assert_eq!(settings.window_width, WINDOW_WIDTH_MIN);
+        assert_eq!(settings.window_height, WINDOW_HEIGHT_MIN);
         assert_eq!(settings.hover_preview_delay_ms, 400);
         assert_eq!(settings.max_text_lines, 5);
         assert_eq!(settings.card_radius, 0.0);
@@ -297,12 +342,15 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("settings.yaml");
         let settings = Settings {
+            settings_version: Some(SETTINGS_VERSION),
             data_source: crate::source::DataSourceConfig {
                 kind: crate::source::SourceKind::GitHub,
                 url: "https://github.com/owner/repo/blob/main/memos.yaml".to_owned(),
                 token: "secret-token".to_owned(),
                 ..crate::source::DataSourceConfig::default()
             },
+            window_width: 900.0,
+            window_height: 700.0,
             show_on_cursor_display: false,
             start_hidden: true,
             hover_preview_delay_ms: 300,
