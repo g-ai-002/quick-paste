@@ -2,6 +2,7 @@
 
 mod app;
 mod hotkey;
+mod logging;
 mod memo;
 mod memory_trim;
 mod paste;

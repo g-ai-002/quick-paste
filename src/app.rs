@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 
 use crate::{
-    hotkey, memo, memory_trim, paste, preview, settings, settings_window,
+    hotkey, logging, memo, memory_trim, paste, preview, settings, settings_window,
     single_instance::SingleInstance,
     ui::MemoApp,
 };
@@ -22,6 +22,7 @@ struct AppPaths {
     source: PathBuf,
     memos: PathBuf,
     settings: PathBuf,
+    app_log: PathBuf,
     crash_log: PathBuf,
     runtime_dir: PathBuf,
 }
@@ -37,6 +38,7 @@ impl AppPaths {
             source,
             memos,
             settings: data_dir.join("settings.yaml"),
+            app_log: data_dir.join("app.log"),
             crash_log: data_dir.join("crash.log"),
             runtime_dir: data_dir.join("runtime"),
             data_dir,
@@ -58,22 +60,53 @@ pub fn run() {
         );
         return;
     }
+    logging::init(paths.app_log.clone());
+    logging::write(format!(
+        "启动 Quick Paste v{}（日志时间为 UTC）",
+        env!("CARGO_PKG_VERSION")
+    ));
+    logging::write(format!(
+        "工作目录：{}",
+        std::env::current_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|error| format!("<无法获取：{error}>"))
+    ));
+    logging::write(format!(
+        "可执行文件：{}",
+        std::env::current_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|error| format!("<无法获取：{error}>"))
+    ));
+    logging::write(format!("数据目录：{}", paths.data_dir.display()));
+    logging::write(format!("内容源：{}", paths.source.display()));
+    logging::write(format!("本地状态：{}", paths.memos.display()));
+    logging::write(format!("设置文件：{}", paths.settings.display()));
     install_panic_hook(paths.crash_log.clone());
 
     let instance = match SingleInstance::acquire(&paths.runtime_dir) {
         Ok(Some(instance)) => instance,
-        Ok(None) => return,
+        Ok(None) => {
+            logging::write("已有实例在运行，本次启动退出并唤回已有窗口。");
+            return;
+        }
         Err(error) => {
-            append_log(&paths.crash_log, &format!("单实例检查失败：{error}"));
+            let message = format!("单实例检查失败：{error}");
+            append_log(&paths.crash_log, &message);
+            logging::write(&message);
             return;
         }
     };
     let activation_receiver = instance.activation_receiver();
 
     let initial_settings = match settings::load(&paths.settings) {
-        Ok(settings) => settings,
+        Ok(settings) => {
+            logging::write("设置读取成功。");
+            settings
+        }
         Err(error) => {
-            append_log(&paths.crash_log, &format!("读取设置失败：{error}"));
+            let message = format!("读取设置失败，使用默认设置：{error}");
+            append_log(&paths.crash_log, &message);
+            logging::write(&message);
             settings::Settings::default()
         }
     };
@@ -107,9 +140,12 @@ pub fn run() {
                 })
             })
             .unwrap_or_else(|error| panic!("无法创建主窗口：{error}"));
+            logging::write("主窗口创建成功。");
 
             if let Err(error) = preview::install(cx) {
-                append_log(&crash_log_path, &format!("创建预览窗口失败：{error}"));
+                let message = format!("创建预览窗口失败：{error}");
+                append_log(&crash_log_path, &message);
+                logging::write(&message);
             }
             memory_trim::schedule_startup_cleanup();
             if initial_settings.start_hidden {
@@ -117,6 +153,7 @@ pub fn run() {
             }
             spawn_hotkey_task(cx, view.clone(), hotkey_receiver);
             spawn_activation_task(cx, view, activation_receiver);
+            logging::write("启动完成。");
         });
 }
 
@@ -160,7 +197,9 @@ fn spawn_activation_task(cx: &mut App, view: Entity<MemoApp>, receiver: Receiver
 fn install_panic_hook(path: PathBuf) {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        append_log(&path, &format!("panic: {info}"));
+        let message = format!("panic: {info}");
+        append_log(&path, &message);
+        logging::write(&message);
         default_hook(info);
     }));
 }

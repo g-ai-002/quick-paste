@@ -119,6 +119,20 @@ memos:
 - 程序写本地状态时采用原子替换，会重写整个文件，自定义注释不会保留。
 
 
+## 日志
+
+程序没有完整的运行日志系统，但会记录定位问题所需的关键事件：
+
+- `%LOCALAPPDATA%\QuickPaste\app.log`：启动路径、设置读取结果、
+  备忘录内容源 / 本地状态的加载条数与错误、保存失败等，时间为 UTC。
+- `%LOCALAPPDATA%\QuickPaste\crash.log`：panic、设置读取失败、单实例检查失败、
+  预览窗口创建失败等崩溃类错误。
+- `%TEMP%\quick-paste-startup.log`：仅在数据目录创建失败时写入。
+
+设置 → 关于 → 「运行日志」可以直接打开 `app.log`；同页的「数据目录」和
+「内容源」会显示程序实际使用的路径。备忘录解析失败时，主窗口底部也会显示红色提示。
+排查读不到备忘录时，重点看日志里的「工作目录」「内容源」「加载完成」几行。
+
 ## 构建
 
 需要 Windows 10/11 x64 和 Rust 1.96（`rust-toolchain.toml` 已固定版本）。
@@ -155,6 +169,7 @@ src/
 ├── main.rs             入口
 ├── app.rs              GPUI 启动、窗口参数、单实例唤回
 ├── hotkey.rs           全局快捷键注册、自定义录制、切换与状态
+├── logging.rs          运行日志（app.log）
 ├── memo.rs             YAML 读写、字段合并、排序、搜索、数据目录
 ├── memory_trim.rs      隐藏后清理工作集（Windows）
 ├── paste.rs            粘贴流程（Windows 实现 / 其他平台空实现）

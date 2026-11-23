@@ -24,7 +24,7 @@ use gpui_kit::{
 };
 
 use self::smooth_scroll::SmoothScroll;
-use crate::{hotkey, memo, paste, preview, settings, settings_window};
+use crate::{hotkey, logging, memo, paste, preview, settings, settings_window};
 
 const ROW_LINE_HEIGHT: f32 = 22.0;
 const ROW_TAG_HEIGHT: f32 = 20.0;
@@ -99,11 +99,13 @@ impl MemoApp {
         let memos = match Self::load_merged(&source_path, &data_path) {
             Ok(memos) => {
                 if let Err(error) = memo::save(&data_path, &memos) {
+                    logging::write(format!("启动时写入本地状态失败：{error}"));
                     notice = Some(format!("无法写入本地状态：{error}").into());
                 }
                 memos
             }
             Err(error) => {
+                logging::write(format!("启动时读取备忘录失败：{error}"));
                 notice = Some(format!("无法读取备忘录：{error}").into());
                 Vec::new()
             }
@@ -806,6 +808,9 @@ impl MemoApp {
         match Self::load_merged(&self.source_path, &self.data_path) {
             Ok(memos) => {
                 let save_error = memo::save(&self.data_path, &memos).err();
+                if let Some(error) = &save_error {
+                    logging::write(format!("重新加载后写入本地状态失败：{error}"));
+                }
 
                 self.memos = memos;
                 self.tags = memo::sorted_tags(&self.memos);
@@ -822,6 +827,7 @@ impl MemoApp {
                 self.refresh_filter();
             }
             Err(error) => {
+                logging::write(format!("重新加载备忘录失败：{error}"));
                 self.notice = Some(format!("重新加载失败：{error}").into());
             }
         }
@@ -866,6 +872,7 @@ impl MemoApp {
                 }
             }
             Err(error) => {
+                logging::write(format!("保存置顶状态失败：{error}"));
                 self.notice = Some(format!("保存失败：{error}").into());
             }
         }
@@ -939,7 +946,9 @@ impl MemoApp {
         let mut next = self.memos.clone();
         next[index].usage_count = next[index].usage_count.saturating_add(1);
         memo::sort_for_display(&mut next);
-        memo::save(&self.data_path, &next)?;
+        memo::save(&self.data_path, &next).inspect_err(|error| {
+            logging::write(format!("保存使用次数失败：{error}"));
+        })?;
 
         self.memos = next;
         self.refresh_filter();
@@ -1015,14 +1024,63 @@ impl MemoApp {
         source_path: &Path,
         data_path: &Path,
     ) -> Result<Vec<memo::Memo>, memo::MemoError> {
+        logging::write(format!(
+            "加载备忘录：内容源={}（{}），本地状态={}（{}）",
+            source_path.display(),
+            if source_path.exists() {
+                "存在"
+            } else {
+                "不存在"
+            },
+            data_path.display(),
+            if data_path.exists() {
+                "存在"
+            } else {
+                "不存在"
+            },
+        ));
+
         let mut memos = if source_path != data_path && source_path.exists() {
-            let source = memo::load(source_path)?;
-            let local = memo::load_or_create(data_path)?;
-            memo::merge(&source, &local)
+            let source = memo::load(source_path).map_err(|error| {
+                logging::write(format!(
+                    "内容源读取失败（{}）：{error}",
+                    source_path.display()
+                ));
+                error
+            })?;
+            logging::write(format!("内容源读取成功：{} 条", source.len()));
+
+            let local = memo::load_or_create(data_path).map_err(|error| {
+                logging::write(format!(
+                    "本地状态读取失败（{}）：{error}",
+                    data_path.display()
+                ));
+                error
+            })?;
+            logging::write(format!("本地状态读取成功：{} 条", local.len()));
+
+            let merged = memo::merge(&source, &local);
+            logging::write(format!(
+                "合并完成：内容源 {} 条 + 本地状态 {} 条 → {} 条",
+                source.len(),
+                local.len(),
+                merged.len()
+            ));
+            merged
         } else {
-            memo::load_or_create(data_path)?
+            let local = memo::load_or_create(data_path).map_err(|error| {
+                logging::write(format!(
+                    "本地状态读取失败（{}）：{error}",
+                    data_path.display()
+                ));
+                error
+            })?;
+            logging::write(format!("本地状态读取成功：{} 条", local.len()));
+            local
         };
+
         memo::sort_for_display(&mut memos);
+        logging::write(format!("备忘录加载完成：{} 条", memos.len()));
         Ok(memos)
     }
 

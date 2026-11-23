@@ -24,7 +24,7 @@ use gpui_kit::{
 
 use crate::{
     hotkey::{self, HotkeyChoice},
-    memo,
+    logging, memo,
     settings::{
         self, ClickAction, PasteAction, Settings, ThemeChoice,
     },
@@ -254,6 +254,13 @@ const SETTING_META: &[SettingMeta] = &[
         title: "内容源",
         description: "外部编辑的 memos.yaml，程序只读取其中的 text 和 tags。",
         keywords: &["YAML", "内容源", "memos"],
+    },
+    SettingMeta {
+        id: "about_log",
+        page: SettingsPage::About,
+        title: "运行日志",
+        description: "启动路径、配置与备忘录加载结果；时间为 UTC。",
+        keywords: &["日志", "log", "app.log", "排查", "错误"],
     },
     SettingMeta {
         id: "about_hotkey",
@@ -1369,6 +1376,42 @@ impl SettingsWindow {
             )
             .into_any_element();
         rows.push(self.setting_row(meta("about_source"), source_control, cx));
+
+        let log_path = logging::path().map(|path| path.to_path_buf());
+        let log_control = if let Some(log_path) = log_path {
+            let display_path = log_path.display().to_string();
+            let reveal_path = log_path;
+            h_flex()
+                .items_center()
+                .gap_2()
+                .max_w(px(280.0))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_xs()
+                        .text_color(muted_foreground)
+                        .child(display_path),
+                )
+                .child(
+                    Button::new("about-open-log")
+                        .ghost()
+                        .xsmall()
+                        .label("打开")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reveal_path(reveal_path.clone(), cx)
+                        })),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .text_xs()
+                .text_color(muted_foreground)
+                .child("日志尚未初始化")
+                .into_any_element()
+        };
+        rows.push(self.setting_row(meta("about_log"), log_control, cx));
 
         let hotkey_state = hotkey::state(cx);
         let hotkey_label = hotkey_state
