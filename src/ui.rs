@@ -189,7 +189,7 @@ impl MemoApp {
             this.on_window_resized(window, cx);
         });
         let appearance_subscription = cx.observe_window_appearance(window, |_, _window, cx| {
-            if settings::current(cx).theme == settings::ThemeChoice::System {
+            if settings::current(cx).theme == "system" {
                 gpui_kit::component::Theme::sync_system_appearance(None, cx);
             }
         });
@@ -247,7 +247,7 @@ impl MemoApp {
         self.commit_window_size(cx);
         self.cancel_preview(cx);
         self.sync_settings(cx);
-        if self.settings.theme == settings::ThemeChoice::System {
+        if self.settings.theme == "system" {
             gpui_kit::component::Theme::sync_system_appearance(None, cx);
         }
         if self.settings.show_on_cursor_display {

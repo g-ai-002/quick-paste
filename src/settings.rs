@@ -31,27 +31,6 @@ pub const TAG_SIDEBAR_WIDTH_STEP: f32 = 8.0;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ThemeChoice {
-    #[default]
-    System,
-    Light,
-    Dark,
-}
-
-impl ThemeChoice {
-    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::System => "跟随系统",
-            Self::Light => "浅色",
-            Self::Dark => "深色",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ClickAction {
     #[default]
     DoubleClick,
@@ -110,7 +89,7 @@ pub struct Settings {
     pub hover_preview: bool,
     pub hover_preview_delay_ms: u64,
     pub max_text_lines: usize,
-    pub theme: ThemeChoice,
+    pub theme: String,
     pub card_radius: f32,
     pub tag_sidebar_width: f32,
     pub smooth_scroll: bool,
@@ -135,7 +114,7 @@ impl Default for Settings {
             hover_preview: true,
             hover_preview_delay_ms: 0,
             max_text_lines: 3,
-            theme: ThemeChoice::System,
+            theme: "system".to_owned(),
             card_radius: 6.0,
             tag_sidebar_width: TAG_SIDEBAR_WIDTH_DEFAULT,
             smooth_scroll: true,
@@ -152,6 +131,12 @@ impl Default for Settings {
 impl Settings {
     pub fn normalized(mut self) -> Self {
         self.settings_version = Some(SETTINGS_VERSION);
+        self.theme = match self.theme.trim() {
+            "" | "system" => "system".to_owned(),
+            "light" => "Default Light".to_owned(),
+            "dark" => "Default Dark".to_owned(),
+            value => value.to_owned(),
+        };
         self.data_source = self.data_source.normalized();
         if !self.window_width.is_finite() {
             self.window_width = WINDOW_WIDTH_DEFAULT;
@@ -264,20 +249,41 @@ pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     Ok(())
 }
 
-pub fn apply_theme(choice: ThemeChoice, window: Option<&mut Window>, cx: &mut App) {
+pub fn apply_theme(theme: &str, window: Option<&mut Window>, cx: &mut App) {
+    use gpui_kit::SharedString;
     use gpui_kit::WindowAppearance;
-    use gpui_kit::component::{Theme, ThemeMode};
+    use gpui_kit::component::{Theme, ThemeMode, ThemeRegistry};
 
-    cx.set_window_appearance(match choice {
-        ThemeChoice::System => None,
-        ThemeChoice::Light => Some(WindowAppearance::Light),
-        ThemeChoice::Dark => Some(WindowAppearance::Dark),
-    });
-
-    match choice {
-        ThemeChoice::System => Theme::sync_system_appearance(None, cx),
-        ThemeChoice::Light => Theme::change(ThemeMode::Light, window, cx),
-        ThemeChoice::Dark => Theme::change(ThemeMode::Dark, window, cx),
+    match theme {
+        "system" => {
+            cx.set_window_appearance(None);
+            Theme::sync_system_appearance(window, cx);
+        }
+        "light" => {
+            cx.set_window_appearance(Some(WindowAppearance::Light));
+            Theme::change(ThemeMode::Light, window, cx);
+        }
+        "dark" => {
+            cx.set_window_appearance(Some(WindowAppearance::Dark));
+            Theme::change(ThemeMode::Dark, window, cx);
+        }
+        name => {
+            let name = SharedString::from(name);
+            let config = ThemeRegistry::global(cx).themes().get(&name).cloned();
+            let Some(config) = config else {
+                crate::logging::write(format!("主题不存在：{name}，回退到默认浅色"));
+                cx.set_window_appearance(Some(WindowAppearance::Light));
+                Theme::change(ThemeMode::Light, window, cx);
+                return;
+            };
+            let dark = config.mode.is_dark();
+            cx.set_window_appearance(Some(if dark {
+                WindowAppearance::Dark
+            } else {
+                WindowAppearance::Light
+            }));
+            Theme::update(cx, |current| current.apply_config(&config));
+        }
     }
 }
 
@@ -296,7 +302,7 @@ mod tests {
         assert!(settings.hover_preview);
         assert_eq!(settings.hover_preview_delay_ms, 0);
         assert_eq!(settings.max_text_lines, 3);
-        assert_eq!(settings.theme, ThemeChoice::System);
+        assert_eq!(settings.theme, "system");
         assert_eq!(settings.tag_sidebar_width, TAG_SIDEBAR_WIDTH_DEFAULT);
         assert_eq!(settings.hotkey, HotkeyChoice::CtrlShiftX);
         assert!(settings.clear_search_after_paste);
@@ -355,7 +361,7 @@ mod tests {
             start_hidden: true,
             hover_preview_delay_ms: 300,
             max_text_lines: 5,
-            theme: ThemeChoice::Dark,
+            theme: "Default Dark".to_owned(),
             card_radius: 10.0,
             tag_sidebar_width: 176.0,
             hotkey: HotkeyChoice::Custom("ctrl+alt+c".into()),
@@ -389,7 +395,7 @@ mod tests {
         fs::write(&path, "theme: dark\n").expect("write");
 
         let settings = load(&path).expect("load");
-        assert_eq!(settings.theme, ThemeChoice::Dark);
+        assert_eq!(settings.theme, "Default Dark");
         assert_eq!(settings.tag_sidebar_width, TAG_SIDEBAR_WIDTH_DEFAULT);
     }
 }

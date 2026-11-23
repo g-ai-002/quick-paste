@@ -11,7 +11,8 @@ use gpui_kit::{
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
     Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, size,
     component::{
-        ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _,
+        ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, ThemeRegistry,
+        WindowExt as _,
         button::{Button, ButtonVariants},
         h_flex,
         input::{Input, InputEvent, InputState},
@@ -24,7 +25,7 @@ use gpui_kit::{
 use crate::{
     hotkey::{self, HotkeyChoice},
     logging, memo,
-    settings::{self, ClickAction, PasteAction, Settings, ThemeChoice},
+    settings::{self, ClickAction, PasteAction, Settings},
     source::{ContentSource, DataSourceConfig, SourceKind},
 };
 
@@ -200,7 +201,7 @@ const SETTING_META: &[SettingMeta] = &[
         id: "theme",
         page: SettingsPage::Appearance,
         title: "主题",
-        description: "浅色、深色或跟随系统外观。",
+        description: "选择 GPUI Kit 内置主题，或跟随系统外观。",
         keywords: &["配色", "深色", "浅色", "系统"],
     },
     SettingMeta {
@@ -538,7 +539,7 @@ impl SettingsWindow {
 
         let appearance_subscription =
             cx.observe_window_appearance(window, |_, _window, cx| {
-                if settings::current(cx).theme == ThemeChoice::System {
+                if settings::current(cx).theme == "system" {
                     gpui_kit::component::Theme::sync_system_appearance(None, cx);
                 }
             });
@@ -641,7 +642,7 @@ impl SettingsWindow {
         }
 
         if next.theme != previous.theme {
-            settings::apply_theme(next.theme, Some(window), cx);
+            settings::apply_theme(&next.theme, Some(window), cx);
         }
 
         self.settings = next;
@@ -786,13 +787,102 @@ impl SettingsWindow {
 
     fn set_theme(
         &mut self,
-        value: ThemeChoice,
+        value: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.update_settings(window, cx, |settings| {
             settings.theme = value;
         });
+    }
+
+    fn theme_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+        let selected_theme = self.settings.theme.as_str();
+        let themes: Vec<(String, &'static str)> = ThemeRegistry::global(cx)
+            .sorted_themes()
+            .into_iter()
+            .map(|config| {
+                let mode = if config.mode.is_dark() { "深色" } else { "浅色" };
+                (config.name.to_string(), mode)
+            })
+            .collect();
+
+        let mut items = Vec::with_capacity(themes.len() + 1);
+        items.push(self.theme_row(
+            "system".to_owned(),
+            "跟随系统".to_owned(),
+            None,
+            selected_theme == "system",
+            cx,
+        ));
+        for (name, mode) in themes {
+            let selected = selected_theme == name.as_str();
+            items.push(self.theme_row(name.clone(), name, Some(mode), selected, cx));
+        }
+
+        div()
+            .w(px(320.0))
+            .max_h(px(220.0))
+            .overflow_y_scroll()
+            .child(
+                v_flex()
+                    .id("appearance-theme-list")
+                    .w_full()
+                    .gap_1()
+                    .children(items),
+            )
+            .into_any_element()
+    }
+
+    fn theme_row(
+        &self,
+        value: String,
+        label: String,
+        mode: Option<&'static str>,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (background, foreground, hover_background, muted_foreground) = {
+            let theme = cx.theme();
+            (
+                if selected {
+                    theme.muted
+                } else {
+                    theme.background
+                },
+                theme.foreground,
+                theme.accent,
+                theme.muted_foreground,
+            )
+        };
+        let id = SharedString::from(format!("theme-choice-{value}"));
+
+        h_flex()
+            .id(id)
+            .w_full()
+            .h(px(28.0))
+            .flex_shrink_0()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .rounded(px(6.0))
+            .bg(background)
+            .text_color(foreground)
+            .cursor_pointer()
+            .hover(move |this| this.bg(hover_background))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.set_theme(value.clone(), window, cx);
+            }))
+            .child(div().flex_1().min_w_0().truncate().text_sm().child(label))
+            .children(
+                mode.map(|mode| {
+                    div()
+                        .text_xs()
+                        .text_color(muted_foreground)
+                        .child(mode)
+                }),
+            )
+            .into_any_element()
     }
 
     fn set_card_radius(
@@ -943,7 +1033,7 @@ impl SettingsWindow {
                 settings.max_text_lines = defaults.max_text_lines;
             }
             SettingsPage::Appearance => {
-                settings.theme = defaults.theme;
+                settings.theme = defaults.theme.clone();
                 settings.card_radius = defaults.card_radius;
                 settings.tag_sidebar_width = defaults.tag_sidebar_width;
                 settings.smooth_scroll = defaults.smooth_scroll;
@@ -1335,17 +1425,7 @@ impl SettingsWindow {
     fn render_appearance(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut rows = Vec::new();
 
-        let themes: Vec<_> = ThemeChoice::ALL
-            .into_iter()
-            .map(|choice| (choice, choice.label()))
-            .collect();
-        let control = self.segmented(
-            "appearance-theme",
-            &themes,
-            self.settings.theme,
-            Self::set_theme,
-            cx,
-        );
+        let control = self.theme_picker(cx);
         rows.push(self.setting_row(meta("theme"), control, cx));
 
         let radii = [
@@ -1762,7 +1842,7 @@ impl SettingsWindow {
         let pages = SettingsPage::ALL.into_iter().map(|page| {
             let active = self.active_page == page;
             let icon_color = if active {
-                theme.sidebar_primary_foreground
+                theme.foreground
             } else {
                 theme.sidebar_foreground
             };
@@ -1778,8 +1858,7 @@ impl SettingsWindow {
                 .text_sm()
                 .cursor_pointer()
                 .when(active, |this| {
-                    this.bg(theme.sidebar_primary)
-                        .text_color(theme.sidebar_primary_foreground)
+                    this.bg(theme.muted).text_color(theme.foreground)
                 })
                 .when(!active, |this| {
                     this.text_color(theme.sidebar_foreground).hover(|style| {

@@ -14,6 +14,7 @@ use crate::{
     hotkey, logging, memo, memory_trim, paste, preview, settings, settings_window,
     single_instance::SingleInstance,
     source,
+    themes,
     ui::MemoApp,
 };
 
@@ -123,8 +124,9 @@ pub fn run() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            themes::install(cx);
             settings::install(cx, settings_path, initial_settings.clone());
-            settings::apply_theme(initial_settings.theme, None, cx);
+            settings::apply_theme(&initial_settings.theme, None, cx);
             settings_window::install(cx);
             cx.set_global(InstanceGuard(instance));
 
