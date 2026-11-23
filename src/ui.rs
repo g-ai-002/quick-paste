@@ -107,7 +107,7 @@ impl MemoApp {
         let mut notice: Option<SharedString> = None;
         let mut loading = false;
         let mut pending_reload = false;
-        let mut memos = if content_source.is_remote() {
+        let memos = if content_source.is_remote() {
             pending_reload = true;
             loading = true;
             match memo::load(&data_path) {
