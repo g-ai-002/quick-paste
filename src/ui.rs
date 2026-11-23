@@ -35,7 +35,7 @@ const ROW_PADDING_X: f32 = 12.0;
 const ROW_PADDING_Y: f32 = 12.0;
 const ROW_CONTENT_GAP: f32 = 4.0;
 const ROW_GAP: f32 = 8.0;
-const PIN_SIZE: f32 = 24.0;
+const PIN_SIZE: f32 = 32.0;
 const PIN_INSET: f32 = 6.0;
 const ROW_TEXT_RIGHT: f32 = PIN_SIZE + PIN_INSET + 6.0;
 const TAG_ROW_HEIGHT: f32 = 30.0;
@@ -714,21 +714,19 @@ impl MemoApp {
                     .items_center()
                     .justify_center()
                     .rounded_md()
-                    .when(hovered, |this| {
-                        this.hover(move |this| this.bg(pin_hover_bg))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                cx.stop_propagation();
-                                this.toggle_pin(index, cx);
-                            }))
-                    })
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(pin_hover_bg))
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        cx.stop_propagation();
+                        this.toggle_pin(index, cx);
+                    }))
                     .child(
                         Icon::new(if pinned {
                             IconName::StarFill
                         } else {
                             IconName::Star
                         })
-                        .small()
+                        .large()
                         .text_color(primary),
                     )
             }));
