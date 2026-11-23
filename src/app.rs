@@ -13,13 +13,13 @@ use gpui_kit::{
 use crate::{
     hotkey, logging, memo, memory_trim, paste, preview, settings, settings_window,
     single_instance::SingleInstance,
+    source,
     ui::MemoApp,
 };
 
 #[derive(Clone)]
 struct AppPaths {
     data_dir: PathBuf,
-    source: PathBuf,
     memos: PathBuf,
     settings: PathBuf,
     app_log: PathBuf,
@@ -31,11 +31,7 @@ impl AppPaths {
     fn discover() -> Self {
         let data_dir = memo::data_directory();
         let memos = data_dir.join("memos.yaml");
-        let source = memo::external_source_path()
-            .filter(|path| path.as_path() != memos.as_path())
-            .unwrap_or_else(|| memos.clone());
         Self {
-            source,
             memos,
             settings: data_dir.join("settings.yaml"),
             app_log: data_dir.join("app.log"),
@@ -78,7 +74,6 @@ pub fn run() {
             .unwrap_or_else(|error| format!("<无法获取：{error}>"))
     ));
     logging::write(format!("数据目录：{}", paths.data_dir.display()));
-    logging::write(format!("内容源：{}", paths.source.display()));
     logging::write(format!("本地状态：{}", paths.memos.display()));
     logging::write(format!("设置文件：{}", paths.settings.display()));
     install_panic_hook(paths.crash_log.clone());
@@ -111,9 +106,15 @@ pub fn run() {
         }
     };
 
+    let data_source = initial_settings.data_source.clone();
+    let content_source = source::ContentSource::resolve(&data_source, &paths.memos);
+    logging::write(format!("内容源：{}", content_source.location()));
+    if let Some(error) = data_source.validation_error() {
+        logging::write(format!("数据源配置无效：{error}"));
+    }
+
     paste::start_foreground_tracker();
 
-    let source_path = paths.source.clone();
     let memos_path = paths.memos.clone();
     let settings_path = paths.settings.clone();
     let crash_log_path = paths.crash_log.clone();
@@ -134,7 +135,7 @@ pub fn run() {
                     MemoApp::new(
                         window,
                         cx,
-                        source_path.clone(),
+                        data_source.clone(),
                         memos_path.clone(),
                     )
                 })

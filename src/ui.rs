@@ -1,7 +1,7 @@
 mod smooth_scroll;
 
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -24,7 +24,9 @@ use gpui_kit::{
 };
 
 use self::smooth_scroll::SmoothScroll;
-use crate::{hotkey, logging, memo, paste, preview, settings, settings_window};
+use crate::{
+    hotkey, logging, memo, paste, preview, settings, settings_window, source,
+};
 
 const ROW_LINE_HEIGHT: f32 = 22.0;
 const ROW_TAG_HEIGHT: f32 = 20.0;
@@ -41,7 +43,8 @@ const TAG_ROW_HEIGHT: f32 = 30.0;
 const MIN_MEMO_LIST_WIDTH: f32 = 410.0;
 
 pub struct MemoApp {
-    source_path: PathBuf,
+    source: source::ContentSource,
+    data_source: source::DataSourceConfig,
     data_path: PathBuf,
     memos: Vec<memo::Memo>,
     tags: Vec<String>,
@@ -58,6 +61,9 @@ pub struct MemoApp {
     window_active: bool,
     suppress_blur_until: Option<Instant>,
     preview_generation: u64,
+    loading: bool,
+    pending_reload: bool,
+    load_generation: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -65,10 +71,11 @@ impl MemoApp {
     pub fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
-        source_path: PathBuf,
+        data_source: source::DataSourceConfig,
         data_path: PathBuf,
     ) -> Self {
         let app_settings = settings::current(cx);
+        let content_source = source::ContentSource::resolve(&data_source, &data_path);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索备忘录…"));
 
         let subscription = cx.subscribe_in(
@@ -96,20 +103,50 @@ impl MemoApp {
         );
 
         let mut notice: Option<SharedString> = None;
-        let memos = match Self::load_merged(&source_path, &data_path) {
-            Ok(memos) => {
-                if let Err(error) = memo::save(&data_path, &memos) {
-                    logging::write(format!("启动时写入本地状态失败：{error}"));
-                    notice = Some(format!("无法写入本地状态：{error}").into());
+        let mut loading = false;
+        let mut pending_reload = false;
+        let mut memos = if content_source.is_remote() {
+            pending_reload = true;
+            loading = true;
+            match memo::load(&data_path) {
+                Ok(mut cached) => {
+                    memo::sort_for_display(&mut cached);
+                    cached
                 }
-                memos
+                Err(error) if data_path.exists() => {
+                    logging::write(format!("启动时读取本地缓存失败：{error}"));
+                    notice = Some(format!("无法读取本地缓存：{error}").into());
+                    Vec::new()
+                }
+                Err(_) => Vec::new(),
             }
-            Err(error) => {
-                logging::write(format!("启动时读取备忘录失败：{error}"));
-                notice = Some(format!("无法读取备忘录：{error}").into());
-                Vec::new()
+        } else {
+            match source::load_merged(&content_source, &data_source, &data_path) {
+                Ok(memos) => {
+                    if let Err(error) = memo::save(&data_path, &memos) {
+                        logging::write(format!("启动时写入本地状态失败：{error}"));
+                        notice = Some(format!("无法写入本地状态：{error}").into());
+                    }
+                    memos
+                }
+                Err(error) => {
+                    logging::write(format!("启动时读取备忘录失败：{error}"));
+                    let mut cached = memo::load(&data_path).unwrap_or_default();
+                    if cached.is_empty() {
+                        notice = Some(format!("无法读取备忘录：{error}").into());
+                    } else {
+                        memo::sort_for_display(&mut cached);
+                        notice = Some(
+                            format!("无法读取备忘录：{error}；已显示本地缓存").into(),
+                        );
+                    }
+                    cached
+                }
             }
         };
+        if content_source.is_remote() && notice.is_none() {
+            notice = Some("正在加载远端数据源…".into());
+        }
         let tags = memo::sorted_tags(&memos);
         let filtered = Rc::new(memo::matching_indices(&memos, ""));
         let row_sizes = Rc::new(Self::compute_row_sizes(
@@ -150,7 +187,8 @@ impl MemoApp {
         });
 
         let app = Self {
-            source_path,
+            source: content_source,
+            data_source,
             data_path,
             memos,
             tags,
@@ -167,6 +205,9 @@ impl MemoApp {
             window_active: window.is_window_active(),
             suppress_blur_until: None,
             preview_generation: 0,
+            loading,
+            pending_reload,
+            load_generation: 0,
             _subscriptions: vec![
                 subscription,
                 activation_subscription,
@@ -342,7 +383,22 @@ impl MemoApp {
         let current = settings::current(cx);
         if current != self.settings {
             let layout_changed = current.max_text_lines != self.settings.max_text_lines;
+            let source_changed = current.data_source != self.settings.data_source;
             self.settings = current;
+            if source_changed {
+                self.data_source = self.settings.data_source.clone();
+                self.source = source::ContentSource::resolve(&self.data_source, &self.data_path);
+                self.load_generation = self.load_generation.wrapping_add(1);
+                self.loading = false;
+                self.pending_reload = true;
+                self.notice = Some(
+                    format!(
+                        "数据源已切换为 {}，正在重新加载…",
+                        self.source.kind().label()
+                    )
+                    .into(),
+                );
+            }
             if layout_changed {
                 self.refresh_filter();
             }
@@ -461,12 +517,12 @@ impl MemoApp {
         // 右侧列表在横排容器里：flex_1 只分配宽度，高度必须显式撑满，否则会塌缩。
         if self.filtered.is_empty() {
             let content = if self.memos.is_empty() {
-                render_empty_state(
-                    IconName::FileText,
-                    "还没有备忘录",
-                    "在内容源 memos.yaml 中添加记录，再点「重新加载」",
-                    cx,
-                )
+                let hint = if self.source.is_remote() {
+                    "在远端 memos.yaml 中添加记录，再点「重新加载」"
+                } else {
+                    "在内容源 memos.yaml 中添加记录，再点「重新加载」"
+                };
+                render_empty_state(IconName::FileText, "还没有备忘录", hint, cx)
             } else {
                 render_empty_state(
                     IconName::Search,
@@ -684,12 +740,17 @@ impl MemoApp {
             settings::ClickAction::SingleClick => "单击粘贴",
         };
 
-        let hint: SharedString = match (&hotkey.label, &hotkey.error) {
+        let hint: String = match (&hotkey.label, &hotkey.error) {
             (Some(label), _) => {
-                format!("{click_hint} · {label} 显示/隐藏 · 关闭窗口后仍在后台运行").into()
+                format!("{click_hint} · {label} 显示/隐藏 · 关闭窗口后仍在后台运行")
             }
-            (None, Some(error)) => format!("{click_hint} · {error}").into(),
-            (None, None) => click_hint.into(),
+            (None, Some(error)) => format!("{click_hint} · {error}"),
+            (None, None) => click_hint.to_owned(),
+        };
+        let hint: SharedString = if self.loading {
+            format!("{hint} · 正在加载数据源…").into()
+        } else {
+            hint.into()
         };
 
         v_flex()
@@ -739,7 +800,7 @@ impl MemoApp {
                             .ghost()
                             .xsmall()
                             .icon(IconName::FolderOpen)
-                            .tooltip("打开数据文件")
+                            .tooltip("打开本地状态文件")
                             .on_click(cx.listener(Self::open_data_file)),
                     )
                     .child(
@@ -805,8 +866,67 @@ impl MemoApp {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
-        match Self::load_merged(&self.source_path, &self.data_path) {
-            Ok(memos) => {
+        self.sync_settings(cx);
+        self.start_load(cx);
+        cx.notify();
+    }
+
+    fn start_load(&mut self, cx: &mut Context<Self>) {
+        self.pending_reload = false;
+        self.load_generation = self.load_generation.wrapping_add(1);
+        let generation = self.load_generation;
+        self.loading = true;
+        if self.source.is_remote() {
+            self.notice = Some("正在加载远端数据源…".into());
+        }
+
+        let content_source = self.source.clone();
+        let data_source = self.data_source.clone();
+        let data_path = self.data_path.clone();
+        let (sender, receiver) =
+            async_channel::unbounded::<Result<Vec<memo::Memo>, String>>();
+        std::thread::spawn(move || {
+            let result = source::load_merged(&content_source, &data_source, &data_path)
+                .map_err(|error| error.to_string());
+            let _ = sender.try_send(result);
+        });
+
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            let Ok(result) = receiver.recv().await else {
+                return;
+            };
+            let _ = weak.update(cx, |this, cx| this.finish_load(generation, result, cx));
+        })
+        .detach();
+    }
+
+    fn finish_load(
+        &mut self,
+        generation: u64,
+        result: Result<Vec<memo::Memo>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.load_generation {
+            return;
+        }
+        self.loading = false;
+
+        match result {
+            Ok(mut memos) => {
+                // 后台读取期间用户可能刚粘贴或置顶，保留界面上的最新状态。
+                for memo in &mut memos {
+                    if let Some(current) = self
+                        .memos
+                        .iter()
+                        .find(|current| current.text == memo.text)
+                    {
+                        memo.usage_count = current.usage_count;
+                        memo.is_pinned = current.is_pinned;
+                    }
+                }
+                memo::sort_for_display(&mut memos);
+
                 let save_error = memo::save(&self.data_path, &memos).err();
                 if let Some(error) = &save_error {
                     logging::write(format!("重新加载后写入本地状态失败：{error}"));
@@ -828,7 +948,7 @@ impl MemoApp {
             }
             Err(error) => {
                 logging::write(format!("重新加载备忘录失败：{error}"));
-                self.notice = Some(format!("重新加载失败：{error}").into());
+                self.notice = Some(format!("加载数据源失败：{error}").into());
             }
         }
         cx.notify();
@@ -844,7 +964,7 @@ impl MemoApp {
     fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.suppress_blur_until = Some(Instant::now() + Duration::from_millis(800));
         if let Err(error) =
-            settings_window::open(cx, self.source_path.clone(), self.data_path.clone())
+            settings_window::open(cx, self.source.clone(), self.data_path.clone())
         {
             self.suppress_blur_until = None;
             self.notice = Some(format!("无法打开设置：{error}").into());
@@ -1020,70 +1140,6 @@ impl MemoApp {
         }
     }
 
-    fn load_merged(
-        source_path: &Path,
-        data_path: &Path,
-    ) -> Result<Vec<memo::Memo>, memo::MemoError> {
-        logging::write(format!(
-            "加载备忘录：内容源={}（{}），本地状态={}（{}）",
-            source_path.display(),
-            if source_path.exists() {
-                "存在"
-            } else {
-                "不存在"
-            },
-            data_path.display(),
-            if data_path.exists() {
-                "存在"
-            } else {
-                "不存在"
-            },
-        ));
-
-        let mut memos = if source_path != data_path && source_path.exists() {
-            let source = memo::load(source_path).map_err(|error| {
-                logging::write(format!(
-                    "内容源读取失败（{}）：{error}",
-                    source_path.display()
-                ));
-                error
-            })?;
-            logging::write(format!("内容源读取成功：{} 条", source.len()));
-
-            let local = memo::load_or_create(data_path).map_err(|error| {
-                logging::write(format!(
-                    "本地状态读取失败（{}）：{error}",
-                    data_path.display()
-                ));
-                error
-            })?;
-            logging::write(format!("本地状态读取成功：{} 条", local.len()));
-
-            let merged = memo::merge(&source, &local);
-            logging::write(format!(
-                "合并完成：内容源 {} 条 + 本地状态 {} 条 → {} 条",
-                source.len(),
-                local.len(),
-                merged.len()
-            ));
-            merged
-        } else {
-            let local = memo::load_or_create(data_path).map_err(|error| {
-                logging::write(format!(
-                    "本地状态读取失败（{}）：{error}",
-                    data_path.display()
-                ));
-                error
-            })?;
-            logging::write(format!("本地状态读取成功：{} 条", local.len()));
-            local
-        };
-
-        memo::sort_for_display(&mut memos);
-        logging::write(format!("备忘录加载完成：{} 条", memos.len()));
-        Ok(memos)
-    }
-
     fn compute_row_sizes(
         memos: &[memo::Memo],
         filtered: &[usize],
@@ -1113,6 +1169,17 @@ impl Render for MemoApp {
             paste::set_main_window(hwnd);
         }
         self.sync_settings(cx);
+        if self.pending_reload {
+            let weak = cx.entity().downgrade();
+            cx.defer(move |cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    if this.pending_reload {
+                        this.start_load(cx);
+                        cx.notify();
+                    }
+                });
+            });
+        }
 
         // 清除按钮等程序化改值不会发 Change 事件，这里按实际内容兜底同步过滤词。
         let query = self.search.read(cx).value().to_string();

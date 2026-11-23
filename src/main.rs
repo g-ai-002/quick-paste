@@ -10,6 +10,7 @@ mod preview;
 mod settings;
 mod settings_window;
 mod single_instance;
+mod source;
 mod ui;
 
 fn main() {

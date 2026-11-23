@@ -3,11 +3,13 @@
 一个只做一件事的 Windows 小工具：把常用的纯文本存成备忘录，双击一下，
 内容就会粘贴回刚才正在输入的输入框。
 
-界面基于 Rust + [GPUI Kit](https://github.com/longbridge/gpui-kit)，数据保存在
-本地 YAML 文件里，可以直接用编辑器修改。
+界面基于 Rust + [GPUI Kit](https://github.com/longbridge/gpui-kit)，数据来自本地
+YAML 文件或 Gitea / Gitee / GitHub / GitLab 仓库里的 YAML 文件，可以直接用编辑器修改。
 
 ## 功能
 
+- 五种数据源：本地文件、Gitea 仓库文件、Gitee 仓库文件、GitHub 仓库文件、GitLab 仓库文件；
+  远端数据源可在多台设备间共享同一份 `memos.yaml`。
 - 备忘录列表：从 YAML 读取纯文本和标签，支持按文本或标签搜索。
 - 标签过滤：左侧标签栏宽度可在设置中调整（默认 128 px，窗口过窄时自动收窄）；
   点选标签后只显示包含该标签的备忘录，标签按字典序排列，过长时以省略号截断，
@@ -24,7 +26,7 @@
   可切换为单击触发或仅复制到剪贴板。
 - 全局热键：默认 `Ctrl+Shift+X` 显示 / 隐藏窗口，可在设置中录制任意
   `Ctrl` / `Alt` / `Shift` 组合键。
-- 设置窗口：常规、预览、外观、快捷键、快速粘贴、关于六个页面，支持跨页面搜索。
+- 设置窗口：常规、数据源、预览、外观、快捷键、快速粘贴、关于七个页面，支持跨页面搜索。
 - 后台常驻：关闭窗口只是隐藏，再次按热键或重新启动程序即可唤回。
 - YAML 持久化：`text` / `tags` 可在程序外编辑；`usage_count` / `is_pinned`
   由程序维护并写回本地。
@@ -32,8 +34,9 @@
 
 ## 使用
 
-1. 准备一份 `memos.yaml`（格式见下文），放在程序所在目录或当前工作目录。
-2. 运行 `quick-paste.exe`，窗口会读取其中的备忘录。
+1. 准备一份 `memos.yaml`（格式见下文），放在程序所在目录或当前工作目录；
+   也可以在设置 → 数据源中指定本地路径或远端仓库文件。
+2. 运行 `quick-paste.exe`，窗口会读取配置的数据源。
 3. 切到任意程序的输入框，按 `Ctrl+Shift+X` 打开本窗口，双击一条备忘录。
 4. 内容会粘贴到刚才的输入框，本窗口自动隐藏。
 
@@ -54,11 +57,13 @@
 
 ## 设置
 
-点主窗口右下角的齿轮，或按 `Ctrl+,` 打开设置窗口。左侧是六个页面，左上角的搜索框
-可以跨页面搜索设置项；修改会立即保存到
-`%LOCALAPPDATA%\QuickPaste\settings.yaml`。
+点主窗口右下角的齿轮，或按 `Ctrl+,` 打开设置窗口。左侧是七个页面，左上角的搜索框
+可以跨页面搜索设置项；大部分修改会立即保存到
+`%LOCALAPPDATA%\QuickPaste\settings.yaml`，数据源页面点「应用」后保存。
 
 - **常规**：在鼠标所在屏幕弹出、失去焦点自动隐藏、启动时隐藏窗口。
+- **数据源**：本地文件、Gitea、Gitee、GitHub、GitLab 五选一；远端数据源填写 YAML 文件
+  URL 与 TOKEN，点「应用」后生效。
 - **预览**：悬停预览开关、悬停停留时间（默认 0.1 秒，可选 0–0.4 秒）、
   卡片正文最多显示行数。
 - **外观**：浅色 / 深色 / 跟随系统、主窗口标签栏宽度（80–240 px）、卡片圆角、平滑滚动。
@@ -72,19 +77,40 @@
 
 ## 数据文件
 
-程序最多会使用两份 `memos.yaml`，设置则单独保存在
-`%LOCALAPPDATA%\QuickPaste\settings.yaml`：
+程序的设置保存在 `%LOCALAPPDATA%\QuickPaste\settings.yaml`，备忘录内容则来自
+设置 → 数据源中选择的一处内容源。
 
-1. **内容源**：启动时按顺序查找「当前工作目录」和「exe 所在目录」下的
-   `memos.yaml`，以其中的 `text` 和 `tags` 为准。
-2. **本地状态**：`%LOCALAPPDATA%\QuickPaste\memos.yaml`，保存合并后的完整记录，
-   包括使用次数和置顶状态。
+### 五种数据源
 
-找到内容源时，程序会把内容源里的 `text` / `tags` 与本地状态里的
-`usage_count` / `is_pinned` 合并，再写回本地状态文件。外部无论怎样修改内容源，
-都以本地状态文件里的使用次数和置顶状态为准；内容源里新增的条目没有本地状态时，
-采用内容源填写的初始值。程序不会改写内容源，只读取其中的数据。没有找到内容源时，
-本地状态文件同时充当内容源。
+- **本地文件**：默认自动查找「当前工作目录」和「exe 所在目录」下的
+  `memos.yaml`；也可以填写绝对路径。只在本机可用。
+- **Gitea 仓库文件**：读取自建 Gitea 上的 YAML，支持 `http://` 与 `https://`。
+- **Gitee 仓库文件**：读取 Gitee 上的 YAML；地址必须是 `gitee.com` 域名。
+- **GitHub 仓库文件**：读取 GitHub 上的 YAML；地址必须是 `github.com`、
+  `raw.githubusercontent.com` 或 `api.github.com` 域名。
+- **GitLab 仓库文件**：读取 GitLab（含私有化部署）上的 YAML，支持自定义域名、
+  端口与 `http://` / `https://`；`gitlab.com` 必须使用 HTTPS。
+
+远端 URL 可以填仓库的文件页面（`/blob/`、Gitea 的 `/src/`）或 raw 地址，
+程序会自动转换成真正的原始文件地址。分支名包含 `/` 时请直接填 raw 或 API 地址。
+GitLab 安装在子路径时，请直接填 `/api/v4/projects/.../repository/files/.../raw` 地址。
+私有仓库需要填写 TOKEN；公开仓库可以留空。
+TOKEN 以明文保存在本机 `settings.yaml`，不会写进日志或关于页。GitLab 的 TOKEN
+至少需要 `read_repository`（或 `read_api`）权限。
+
+GitLab / Gitea 使用自签名 HTTPS 证书时，先把 CA 证书导入 Windows
+「受信任的根证书颁发机构」；程序通过系统证书库校验证书。
+
+### 本地状态与缓存
+
+`%LOCALAPPDATA%\QuickPaste\memos.yaml` 保存合并后的完整记录，包括使用次数和置顶状态。
+无论内容源在本地还是远端，程序都会把内容源里的 `text` / `tags` 与本地状态里的
+`usage_count` / `is_pinned` 合并，再写回本地状态文件。
+
+- 远端数据源只读取 `text` / `tags`；使用次数和置顶状态按设备各自维护，不写回远端。
+- 远端数据源启动时先显示本地缓存，再在后台拉取远端文件；网络失败时保留缓存并提示。
+- 外部修改内容源后，点右下角刷新按钮，或重新按热键唤出窗口即可重新加载。
+- 程序不会改写内容源；没有找到本地内容源时，本地状态文件同时充当内容源。
 
 格式是纯文本 YAML：
 
@@ -131,7 +157,7 @@ memos:
 - `%TEMP%\quick-paste-startup.log`：仅在数据目录创建失败时写入。
 
 设置 → 关于 → 「运行日志」可以直接打开 `app.log`；同页的「数据目录」和
-「内容源」会显示程序实际使用的路径。备忘录解析失败时，主窗口底部也会显示红色提示。
+「内容源」会显示程序实际使用的本地路径或远端 URL。备忘录解析失败时，主窗口底部也会显示红色提示。
 排查读不到备忘录时，重点看日志里的「工作目录」「内容源」「加载完成」几行。
 
 ## 构建
@@ -177,8 +203,9 @@ src/
 ├── paste/platform.rs   前台窗口跟踪、显示器定位、显示隐藏、SendInput
 ├── preview.rs          悬停预览使用的右侧独立弹出窗口
 ├── settings.rs         设置模型、持久化与主题应用
-├── settings_window.rs  设置窗口（六个页面 + 设置项搜索）
+├── settings_window.rs  设置窗口（七个页面 + 设置项搜索）
 ├── single_instance.rs  文件锁单实例与唤回通知
+├── source.rs           本地 / Gitea / Gitee / GitHub / GitLab 内容源与 URL 校验
 └── ui.rs               标签栏、卡片列表、搜索、置顶、悬停预览调度与粘贴界面
 
 scripts/package.ps1     setup + portable 打包

@@ -1,4 +1,4 @@
-//! 设置窗口：六个设置页、设置项搜索与即时保存。
+//! 设置窗口：七个设置页、设置项搜索与即时保存。
 
 use std::{
     path::PathBuf,
@@ -7,10 +7,9 @@ use std::{
 
 use gpui_kit::{
     AnyElement, AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, ClickEvent, Context,
-    Entity, FocusHandle, Focusable,
-    Global, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions,
-    Window, WindowBounds, WindowOptions, div, px, size,
+    Entity, FocusHandle, Focusable, Global, InteractiveElement as _, IntoElement, KeyDownEvent,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, size,
     component::{
         ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _,
         button::{Button, ButtonVariants},
@@ -25,9 +24,8 @@ use gpui_kit::{
 use crate::{
     hotkey::{self, HotkeyChoice},
     logging, memo,
-    settings::{
-        self, ClickAction, PasteAction, Settings, ThemeChoice,
-    },
+    settings::{self, ClickAction, PasteAction, Settings, ThemeChoice},
+    source::{ContentSource, DataSourceConfig, SourceKind},
 };
 
 const SETTINGS_WINDOW_WIDTH: f32 = 800.0;
@@ -39,6 +37,7 @@ const SIDEBAR_WIDTH: f32 = 200.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsPage {
     General,
+    DataSource,
     Preview,
     Appearance,
     Shortcuts,
@@ -47,8 +46,9 @@ enum SettingsPage {
 }
 
 impl SettingsPage {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::General,
+        Self::DataSource,
         Self::Preview,
         Self::Appearance,
         Self::Shortcuts,
@@ -59,6 +59,7 @@ impl SettingsPage {
     const fn id(self) -> &'static str {
         match self {
             Self::General => "general",
+            Self::DataSource => "data-source",
             Self::Preview => "preview",
             Self::Appearance => "appearance",
             Self::Shortcuts => "shortcuts",
@@ -70,6 +71,7 @@ impl SettingsPage {
     const fn title(self) -> &'static str {
         match self {
             Self::General => "常规",
+            Self::DataSource => "数据源",
             Self::Preview => "预览",
             Self::Appearance => "外观",
             Self::Shortcuts => "快捷键",
@@ -81,6 +83,7 @@ impl SettingsPage {
     const fn description(self) -> &'static str {
         match self {
             Self::General => "控制窗口如何出现、何时隐藏。",
+            Self::DataSource => "选择本地文件或远端仓库中的 memos.yaml。",
             Self::Preview => "决定列表里能看到多少内容。",
             Self::Appearance => "主题、主窗口标签栏宽度、圆角与滚动手感。",
             Self::Shortcuts => "全局唤出键与窗口内操作。",
@@ -92,6 +95,7 @@ impl SettingsPage {
     fn icon_name(self) -> IconName {
         match self {
             Self::General => IconName::Settings,
+            Self::DataSource => IconName::FileText,
             Self::Preview => IconName::Eye,
             Self::Appearance => IconName::Palette,
             Self::Shortcuts => IconName::SquareTerminal,
@@ -101,7 +105,7 @@ impl SettingsPage {
     }
 
     const fn is_resettable(self) -> bool {
-        !matches!(self, Self::About)
+        !matches!(self, Self::DataSource | Self::About)
     }
 }
 
@@ -115,6 +119,41 @@ struct SettingMeta {
 }
 
 const SETTING_META: &[SettingMeta] = &[
+    SettingMeta {
+        id: "data_source_kind",
+        page: SettingsPage::DataSource,
+        title: "数据源类型",
+        description: "本地文件仅本机可用；Gitea / Gitee / GitHub / GitLab 可在多台设备间共享同一份 memos.yaml。",
+        keywords: &["数据源", "本地", "Gitea", "Gitee", "GitHub", "GitLab", "仓库", "同步"],
+    },
+    SettingMeta {
+        id: "data_source_local_path",
+        page: SettingsPage::DataSource,
+        title: "本地 YAML 文件",
+        description: "本地文件数据源使用；留空时自动查找当前工作目录和程序目录，也可填写绝对路径。",
+        keywords: &["本地", "路径", "YAML", "文件", "memos"],
+    },
+    SettingMeta {
+        id: "data_source_url",
+        page: SettingsPage::DataSource,
+        title: "远端 YAML 文件 URL",
+        description: "远端数据源使用；填写仓库文件页面或 raw 地址，程序会自动转换为原始文件地址。",
+        keywords: &["URL", "远端", "raw", "YAML", "文件", "仓库", "GitLab"],
+    },
+    SettingMeta {
+        id: "data_source_token",
+        page: SettingsPage::DataSource,
+        title: "访问令牌（TOKEN）",
+        description: "私有仓库需要；公开仓库可留空。TOKEN 以明文保存在本机 settings.yaml。",
+        keywords: &["TOKEN", "令牌", "私有仓库", "认证"],
+    },
+    SettingMeta {
+        id: "data_source_apply",
+        page: SettingsPage::DataSource,
+        title: "应用数据源",
+        description: "保存后主窗口会重新读取；使用次数与置顶状态仍保存在本机。",
+        keywords: &["应用", "保存", "重新加载", "缓存"],
+    },
     SettingMeta {
         id: "show_on_cursor_display",
         page: SettingsPage::General,
@@ -245,14 +284,14 @@ const SETTING_META: &[SettingMeta] = &[
         id: "about_data",
         page: SettingsPage::About,
         title: "数据目录",
-        description: "程序维护的本地状态文件，包含使用次数与置顶状态。",
+        description: "程序维护的本地状态文件，包含使用次数与置顶状态；远端数据源断网时也作为缓存。",
         keywords: &["数据", "目录", "状态"],
     },
     SettingMeta {
         id: "about_source",
         page: SettingsPage::About,
         title: "内容源",
-        description: "外部编辑的 memos.yaml，程序只读取其中的 text 和 tags。",
+        description: "当前使用的数据源；远端地址不显示 TOKEN，程序只读取其中的 text 和 tags。",
         keywords: &["YAML", "内容源", "memos"],
     },
     SettingMeta {
@@ -349,7 +388,7 @@ pub fn install(cx: &mut App) {
 
 pub fn open(
     cx: &mut App,
-    source_path: PathBuf,
+    source: ContentSource,
     data_path: PathBuf,
 ) -> Result<(), String> {
     let existing = cx
@@ -383,7 +422,7 @@ pub fn open(
     };
 
     let (window, _) = gpui_kit::open_window(options, cx, move |window, cx| {
-        cx.new(|cx| SettingsWindow::new(window, cx, source_path, data_path))
+        cx.new(|cx| SettingsWindow::new(window, cx, source, data_path))
     })
     .map_err(|error| format!("无法创建设置窗口：{error}"))?;
 
@@ -394,11 +433,15 @@ pub fn open(
 }
 
 struct SettingsWindow {
-    source_path: PathBuf,
+    source: ContentSource,
     data_path: PathBuf,
     settings: Settings,
+    data_source: DataSourceConfig,
     active_page: SettingsPage,
     search: Entity<InputState>,
+    local_path_input: Entity<InputState>,
+    remote_url_input: Entity<InputState>,
+    token_input: Entity<InputState>,
     query: String,
     highlight: Option<&'static str>,
     notice: Option<SharedString>,
@@ -411,10 +454,33 @@ impl SettingsWindow {
     fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
-        source_path: PathBuf,
+        source: ContentSource,
         data_path: PathBuf,
     ) -> Self {
+        let current_settings = settings::current(cx);
+        let data_source = current_settings.data_source.clone();
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索设置…"));
+
+        let local_path_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("留空自动查找当前目录 / 程序目录")
+        });
+        local_path_input.update(cx, |state, cx| {
+            state.set_value(data_source.local_path.as_str(), window, cx);
+        });
+        let remote_url_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("https://…/memos.yaml")
+        });
+        remote_url_input.update(cx, |state, cx| {
+            state.set_value(data_source.url.as_str(), window, cx);
+        });
+        let token_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("公开仓库可留空")
+        });
+        token_input.update(cx, |state, cx| {
+            state.set_value(data_source.token.as_str(), window, cx);
+            state.toggle_masked(window, cx);
+        });
+
         let subscription = cx.subscribe_in(
             &search,
             window,
@@ -430,6 +496,43 @@ impl SettingsWindow {
                     }
                 }
                 _ => {}
+            },
+        );
+
+        let local_path_subscription = cx.subscribe_in(
+            &local_path_input,
+            window,
+            |this, state, event, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.data_source.local_path = state.read(cx).value().to_string();
+                    cx.notify();
+                } else if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.apply_data_source_now(window, cx);
+                }
+            },
+        );
+        let remote_url_subscription = cx.subscribe_in(
+            &remote_url_input,
+            window,
+            |this, state, event, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.data_source.url = state.read(cx).value().to_string();
+                    cx.notify();
+                } else if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.apply_data_source_now(window, cx);
+                }
+            },
+        );
+        let token_subscription = cx.subscribe_in(
+            &token_input,
+            window,
+            |this, state, event, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.data_source.token = state.read(cx).value().to_string();
+                    cx.notify();
+                } else if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.apply_data_source_now(window, cx);
+                }
             },
         );
 
@@ -449,17 +552,28 @@ impl SettingsWindow {
         });
 
         let app = Self {
-            source_path,
+            source,
             data_path,
-            settings: settings::current(cx),
+            settings: current_settings,
+            data_source,
             active_page: SettingsPage::General,
             search,
+            local_path_input,
+            remote_url_input,
+            token_input,
             query: String::new(),
             highlight: None,
             notice: None,
             recording_hotkey: false,
             focus_handle,
-            _subscriptions: vec![subscription, appearance_subscription, blur_subscription],
+            _subscriptions: vec![
+                subscription,
+                local_path_subscription,
+                remote_url_subscription,
+                token_subscription,
+                appearance_subscription,
+                blur_subscription,
+            ],
         };
         app.search.focus_handle(cx).focus(window, cx);
         app
@@ -534,6 +648,74 @@ impl SettingsWindow {
         self.highlight = None;
         self.notice = None;
         cx.notify();
+    }
+
+    fn set_data_source_kind(
+        &mut self,
+        value: SourceKind,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.data_source.kind != value {
+            self.data_source.kind = value;
+            self.notice = None;
+            cx.notify();
+        }
+    }
+
+    fn apply_data_source(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_data_source_now(window, cx);
+    }
+
+    fn apply_data_source_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.data_source = self.data_source.clone().normalized();
+        if let Some(error) = self.data_source.validation_error() {
+            self.notice = Some(format!("数据源配置无效：{error}").into());
+            cx.notify();
+            return;
+        }
+
+        let data_source = self.data_source.clone();
+        self.update_settings(window, cx, move |settings| {
+            settings.data_source = data_source;
+        });
+
+        if self.settings.data_source == self.data_source {
+            self.source = ContentSource::resolve(&self.data_source, &self.data_path);
+            self.notice = Some("数据源已保存，主窗口正在重新加载。".into());
+            self.sync_data_source_inputs(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn revert_data_source(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.data_source = self.settings.data_source.clone();
+        self.sync_data_source_inputs(window, cx);
+        self.notice = None;
+        cx.notify();
+    }
+
+    fn sync_data_source_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let data_source = self.data_source.clone();
+        self.local_path_input.update(cx, |state, cx| {
+            state.set_value(data_source.local_path.as_str(), window, cx);
+        });
+        self.remote_url_input.update(cx, |state, cx| {
+            state.set_value(data_source.url.as_str(), window, cx);
+        });
+        self.token_input.update(cx, |state, cx| {
+            state.set_value(data_source.token.as_str(), window, cx);
+        });
     }
 
     fn set_show_on_cursor_display(
@@ -776,7 +958,7 @@ impl SettingsWindow {
                 settings.clear_search_after_paste = defaults.clear_search_after_paste;
                 settings.enter_pastes_first = defaults.enter_pastes_first;
             }
-            SettingsPage::About => {}
+            SettingsPage::DataSource | SettingsPage::About => {}
         });
         self.highlight = None;
         self.recording_hotkey = false;
@@ -791,17 +973,19 @@ impl SettingsWindow {
         }
     }
 
-    fn open_homepage(&mut self, cx: &mut Context<Self>) {
+    fn open_url(&mut self, url: String, cx: &mut Context<Self>) {
         if let Err(error) = Command::new("rundll32.exe")
-            .args([
-                "url.dll,FileProtocolHandler",
-                "https://github.com/g-ai-002/quick-paste",
-            ])
+            .arg("url.dll,FileProtocolHandler")
+            .arg(url.as_str())
             .spawn()
         {
-            self.notice = Some(format!("无法打开项目主页：{error}").into());
+            self.notice = Some(format!("无法打开 {url}：{error}").into());
         }
         cx.notify();
+    }
+
+    fn open_homepage(&mut self, cx: &mut Context<Self>) {
+        self.open_url("https://github.com/g-ai-002/quick-paste".to_owned(), cx);
     }
 
     fn bool_switch(
@@ -998,6 +1182,114 @@ impl SettingsWindow {
             cx,
         )];
         self.page_layout(SettingsPage::General, rows, extra, cx)
+    }
+
+    fn render_data_source(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut rows = Vec::new();
+
+        let kinds: Vec<_> = SourceKind::ALL
+            .into_iter()
+            .map(|kind| (kind, kind.label()))
+            .collect();
+        let control = self.segmented(
+            "data-source-kind",
+            &kinds,
+            self.data_source.kind,
+            Self::set_data_source_kind,
+            cx,
+        );
+        rows.push(self.setting_row(meta("data_source_kind"), control, cx));
+
+        let local_path_control = div()
+            .w(px(320.0))
+            .child(
+                Input::new(&self.local_path_input)
+                    .small()
+                    .cleanable(true)
+                    .w_full(),
+            )
+            .into_any_element();
+        rows.push(self.setting_row(
+            meta("data_source_local_path"),
+            local_path_control,
+            cx,
+        ));
+
+        let url_control = div()
+            .w(px(320.0))
+            .child(
+                Input::new(&self.remote_url_input)
+                    .small()
+                    .cleanable(true)
+                    .w_full(),
+            )
+            .into_any_element();
+        rows.push(self.setting_row(meta("data_source_url"), url_control, cx));
+
+        let token_control = div()
+            .w(px(320.0))
+            .child(
+                Input::new(&self.token_input)
+                    .small()
+                    .cleanable(true)
+                    .mask_toggle()
+                    .w_full(),
+            )
+            .into_any_element();
+        rows.push(self.setting_row(meta("data_source_token"), token_control, cx));
+
+        let dirty = self.data_source != self.settings.data_source;
+        let apply_control = h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+                Button::new("data-source-apply")
+                    .xsmall()
+                    .primary()
+                    .label("应用")
+                    .on_click(cx.listener(Self::apply_data_source)),
+            )
+            .child(
+                Button::new("data-source-revert")
+                    .xsmall()
+                    .ghost()
+                    .label("还原")
+                    .on_click(cx.listener(Self::revert_data_source)),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if dirty { "有未应用的修改" } else { "已保存" }),
+            )
+            .into_any_element();
+        rows.push(self.setting_row(meta("data_source_apply"), apply_control, cx));
+
+        let status = match self.data_source.validation_error() {
+            Some(error) => format!("配置有误：{error}"),
+            None if dirty => "修改尚未保存。".to_owned(),
+            None => format!("当前数据源：{}", self.source.location()),
+        };
+
+        let extra = vec![
+            self.info_card_with_status("数据源状态", &status, cx),
+            self.info_card(
+                "远端与本地",
+                "远端文件只读取 text 和 tags；使用次数与置顶状态仍保存在本机。启动时先显示本地缓存，网络恢复后点主窗口刷新按钮即可更新。",
+                cx,
+            ),
+            self.info_card(
+                "TOKEN 说明",
+                "Gitea / Gitee / GitHub / GitLab 的私有仓库需要 TOKEN；公开仓库可以留空。TOKEN 以明文保存在本机 settings.yaml，不会显示在关于页或日志里。",
+                cx,
+            ),
+            self.info_card(
+                "自签名证书",
+                "GitLab / Gitea 使用自签名 HTTPS 证书时，先把 CA 证书导入 Windows「受信任的根证书颁发机构」；程序通过系统证书库校验证书。",
+                cx,
+            ),
+        ];
+        self.page_layout(SettingsPage::DataSource, rows, extra, cx)
     }
 
     fn render_preview(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1351,7 +1643,31 @@ impl SettingsWindow {
             .into_any_element();
         rows.push(self.setting_row(meta("about_data"), data_control, cx));
 
-        let source_path = self.source_path.clone();
+        let source = self.source.clone();
+        let source_action = match &source {
+            ContentSource::Local(path) => {
+                let path = path.clone();
+                Button::new("about-open-source")
+                    .ghost()
+                    .xsmall()
+                    .label("打开")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.reveal_path(path.clone(), cx)
+                    }))
+                    .into_any_element()
+            }
+            ContentSource::Remote { .. } => {
+                let url = source.public_url().unwrap_or_default();
+                Button::new("about-open-source")
+                    .ghost()
+                    .xsmall()
+                    .label("打开")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.open_url(url.clone(), cx)
+                    }))
+                    .into_any_element()
+            }
+        };
         let source_control = h_flex()
             .items_center()
             .gap_2()
@@ -1363,17 +1679,9 @@ impl SettingsWindow {
                     .truncate()
                     .text_xs()
                     .text_color(muted_foreground)
-                    .child(self.source_path.display().to_string()),
+                    .child(source.location()),
             )
-            .child(
-                Button::new("about-open-source")
-                    .ghost()
-                    .xsmall()
-                    .label("打开")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.reveal_path(source_path.clone(), cx)
-                    })),
-            )
+            .child(source_action)
             .into_any_element();
         rows.push(self.setting_row(meta("about_source"), source_control, cx));
 
@@ -1665,6 +1973,7 @@ impl SettingsWindow {
         } else {
             match self.active_page {
                 SettingsPage::General => self.render_general(cx),
+                SettingsPage::DataSource => self.render_data_source(cx),
                 SettingsPage::Preview => self.render_preview(cx),
                 SettingsPage::Appearance => self.render_appearance(cx),
                 SettingsPage::Shortcuts => self.render_shortcuts(cx),

@@ -11,10 +11,12 @@ use gpui_kit::{App, Global, Window};
 use serde::{Deserialize, Serialize};
 
 use crate::hotkey::HotkeyChoice;
+use crate::source::DataSourceConfig;
 
 const HEADER: &str = "\
 # 快速粘贴 · 设置
 # 由程序自动维护；手动修改后重启程序生效。
+# 远端数据源的 TOKEN 会以明文保存在本文件。
 ";
 
 pub const TAG_SIDEBAR_WIDTH_DEFAULT: f32 = 128.0;
@@ -84,6 +86,8 @@ impl PasteAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// 备忘录内容来自本地文件还是远端仓库。
+    pub data_source: DataSourceConfig,
     /// 唤出窗口时移动到鼠标所在的显示器。
     pub show_on_cursor_display: bool,
     /// 程序启动后不显示主窗口，只驻留后台。
@@ -109,6 +113,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            data_source: DataSourceConfig::default(),
             show_on_cursor_display: true,
             start_hidden: false,
             auto_hide_on_blur: true,
@@ -131,6 +136,7 @@ impl Default for Settings {
 
 impl Settings {
     pub fn normalized(mut self) -> Self {
+        self.data_source = self.data_source.normalized();
         self.hover_preview_delay_ms = self.hover_preview_delay_ms.clamp(0, 400);
         self.max_text_lines = self.max_text_lines.clamp(2, 5);
         self.card_radius = self.card_radius.clamp(0.0, 24.0);
@@ -243,6 +249,7 @@ mod tests {
     #[test]
     fn defaults_are_stable() {
         let settings = Settings::default();
+        assert_eq!(settings.data_source.kind, crate::source::SourceKind::Local);
         assert!(settings.show_on_cursor_display);
         assert!(settings.auto_hide_on_blur);
         assert!(settings.hover_preview);
@@ -290,6 +297,12 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("settings.yaml");
         let settings = Settings {
+            data_source: crate::source::DataSourceConfig {
+                kind: crate::source::SourceKind::GitHub,
+                url: "https://github.com/owner/repo/blob/main/memos.yaml".to_owned(),
+                token: "secret-token".to_owned(),
+                ..crate::source::DataSourceConfig::default()
+            },
             show_on_cursor_display: false,
             start_hidden: true,
             hover_preview_delay_ms: 300,
