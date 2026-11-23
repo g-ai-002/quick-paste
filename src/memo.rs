@@ -157,23 +157,54 @@ pub fn merge(source: &[Memo], local: &[Memo]) -> Vec<Memo> {
 
 /// 按忽略大小写的子串匹配文本或标签，返回原列表中的下标。
 pub fn matching_indices(memos: &[Memo], query: &str) -> Vec<usize> {
+    matching_indices_with_tag(memos, query, None)
+}
+
+/// 在搜索词之外再按标签精确过滤；`tag` 为 `None` 表示不限标签。
+/// 标签比较忽略大小写，搜索词仍按子串匹配文本或标签。
+pub fn matching_indices_with_tag(
+    memos: &[Memo],
+    query: &str,
+    tag: Option<&str>,
+) -> Vec<usize> {
     let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return (0..memos.len()).collect();
-    }
+    let tag = tag.map(str::to_lowercase);
 
     memos
         .iter()
         .enumerate()
         .filter_map(|(index, memo)| {
-            let matches_text = memo.text.to_lowercase().contains(&query);
-            let matches_tag = memo
-                .tags
-                .iter()
-                .any(|tag| tag.to_lowercase().contains(&query));
-            (matches_text || matches_tag).then_some(index)
+            let matches_tag = tag.as_ref().is_none_or(|tag| {
+                memo.tags
+                    .iter()
+                    .any(|item| item.to_lowercase() == *tag)
+            });
+            if !matches_tag {
+                return None;
+            }
+
+            let matches_query = query.is_empty()
+                || memo.text.to_lowercase().contains(&query)
+                || memo
+                    .tags
+                    .iter()
+                    .any(|tag| tag.to_lowercase().contains(&query));
+            matches_query.then_some(index)
         })
         .collect()
+}
+
+/// 收集所有备忘录的标签，忽略大小写去重后按字典序排列。
+pub fn sorted_tags(memos: &[Memo]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut tags: Vec<String> = memos
+        .iter()
+        .flat_map(|memo| memo.tags.iter())
+        .filter(|tag| seen.insert(tag.to_lowercase()))
+        .cloned()
+        .collect();
+    tags.sort_by_cached_key(|tag| (tag.to_lowercase(), tag.clone()));
+    tags
 }
 
 /// 列表里需要展示的文本行数：按显式换行和估算的自动换行统计，
@@ -445,6 +476,52 @@ memos:
         assert_eq!(matching_indices(&memos, "世界"), vec![1]);
         assert_eq!(matching_indices(&memos, "ai"), vec![2]);
         assert_eq!(matching_indices(&memos, "   "), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn filters_by_exact_tag_and_query() {
+        let memos = vec![
+            memo("第一条", 0, false, &["工作", "常用"]),
+            memo("第二条", 0, false, &["工作"]),
+            memo("第三条", 0, false, &["生活"]),
+            memo("第四条", 0, false, &["AI"]),
+        ];
+
+        assert_eq!(
+            matching_indices_with_tag(&memos, "", Some("工作")),
+            vec![0, 1]
+        );
+        assert_eq!(
+            matching_indices_with_tag(&memos, "第二条", Some("工作")),
+            vec![1]
+        );
+        assert_eq!(
+            matching_indices_with_tag(&memos, "", Some("作")),
+            Vec::<usize>::new()
+        );
+        assert_eq!(
+            matching_indices_with_tag(&memos, "", Some("常用")),
+            vec![0]
+        );
+        assert_eq!(
+            matching_indices_with_tag(&memos, "", Some("ai")),
+            vec![3]
+        );
+        assert_eq!(
+            matching_indices_with_tag(&memos, "", None),
+            vec![0, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn collects_tags_case_insensitively_in_dictionary_order() {
+        let memos = vec![
+            memo("一", 0, false, &["beta", "工作"]),
+            memo("二", 0, false, &["Alpha", "beta"]),
+            memo("三", 0, false, &["alpha"]),
+        ];
+
+        assert_eq!(sorted_tags(&memos), vec!["Alpha", "beta", "工作"]);
     }
 
     #[test]

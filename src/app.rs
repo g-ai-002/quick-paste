@@ -122,12 +122,12 @@ pub fn run() {
 
 fn window_options(cx: &mut App) -> WindowOptions {
     WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(460.0), px(640.0)), cx)),
+        window_bounds: Some(WindowBounds::centered(size(px(600.0), px(640.0)), cx)),
         titlebar: Some(TitlebarOptions {
             title: Some("快速粘贴".into()),
             ..Default::default()
         }),
-        window_min_size: Some(size(px(420.0), px(520.0))),
+        window_min_size: Some(size(px(540.0), px(520.0))),
         app_id: Some("com.g-ai-002.quick-paste".to_owned()),
         ..Default::default()
     }

@@ -82,7 +82,7 @@ impl SettingsPage {
         match self {
             Self::General => "控制窗口如何出现、何时隐藏。",
             Self::Preview => "决定列表里能看到多少内容。",
-            Self::Appearance => "主题、圆角与滚动手感。",
+            Self::Appearance => "主题、主窗口标签栏宽度、圆角与滚动手感。",
             Self::Shortcuts => "全局唤出键与窗口内操作。",
             Self::QuickPaste => "触发、粘贴与排序。",
             Self::About => "版本、数据文件与项目信息。",
@@ -170,6 +170,13 @@ const SETTING_META: &[SettingMeta] = &[
         title: "卡片圆角",
         description: "调整列表卡片的圆角大小。",
         keywords: &["圆角", "外观"],
+    },
+    SettingMeta {
+        id: "tag_sidebar_width",
+        page: SettingsPage::Appearance,
+        title: "主窗口标签栏宽度",
+        description: "主窗口左侧标签栏宽度，可在 80–240 px 之间调整；窗口过窄时会自动收窄。",
+        keywords: &["标签", "标签栏", "侧栏", "宽度", "布局"],
     },
     SettingMeta {
         id: "smooth_scroll",
@@ -610,6 +617,17 @@ impl SettingsWindow {
         });
     }
 
+    fn set_tag_sidebar_width(
+        &mut self,
+        value: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_settings(window, cx, |settings| {
+            settings.tag_sidebar_width = value;
+        });
+    }
+
     fn set_smooth_scroll(
         &mut self,
         value: bool,
@@ -738,6 +756,7 @@ impl SettingsWindow {
             SettingsPage::Appearance => {
                 settings.theme = defaults.theme;
                 settings.card_radius = defaults.card_radius;
+                settings.tag_sidebar_width = defaults.tag_sidebar_width;
                 settings.smooth_scroll = defaults.smooth_scroll;
             }
             SettingsPage::Shortcuts => {
@@ -1050,6 +1069,50 @@ impl SettingsWindow {
         );
         rows.push(self.setting_row(meta("card_radius"), control, cx));
 
+        let width = self.settings.tag_sidebar_width;
+        let control = h_flex()
+            .items_center()
+            .gap_1()
+            .child(
+                Button::new("appearance-sidebar-width-decrease")
+                    .xsmall()
+                    .ghost()
+                    .label("−")
+                    .tooltip("收窄标签栏")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let value = (this.settings.tag_sidebar_width
+                            - settings::TAG_SIDEBAR_WIDTH_STEP)
+                            .max(settings::TAG_SIDEBAR_WIDTH_MIN);
+                        if value != this.settings.tag_sidebar_width {
+                            this.set_tag_sidebar_width(value, window, cx);
+                        }
+                    })),
+            )
+            .child(
+                div()
+                    .w(px(56.0))
+                    .text_center()
+                    .text_sm()
+                    .child(format!("{width:.0} px")),
+            )
+            .child(
+                Button::new("appearance-sidebar-width-increase")
+                    .xsmall()
+                    .ghost()
+                    .label("+")
+                    .tooltip("加宽标签栏")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let value = (this.settings.tag_sidebar_width
+                            + settings::TAG_SIDEBAR_WIDTH_STEP)
+                            .min(settings::TAG_SIDEBAR_WIDTH_MAX);
+                        if value != this.settings.tag_sidebar_width {
+                            this.set_tag_sidebar_width(value, window, cx);
+                        }
+                    })),
+            )
+            .into_any_element();
+        rows.push(self.setting_row(meta("tag_sidebar_width"), control, cx));
+
         let control = self.bool_switch(
             "appearance-smooth-scroll",
             self.settings.smooth_scroll,
@@ -1058,7 +1121,12 @@ impl SettingsWindow {
         );
         rows.push(self.setting_row(meta("smooth_scroll"), control, cx));
 
-        self.page_layout(SettingsPage::Appearance, rows, Vec::new(), cx)
+        let extra = vec![self.info_card(
+            "主窗口标签栏宽度",
+            "窗口较窄时会优先保证右侧卡片可读，标签栏自动收窄；拉宽窗口后恢复设定宽度。",
+            cx,
+        )];
+        self.page_layout(SettingsPage::Appearance, rows, extra, cx)
     }
 
     fn render_shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {

@@ -17,6 +17,11 @@ const HEADER: &str = "\
 # 由程序自动维护；手动修改后重启程序生效。
 ";
 
+pub const TAG_SIDEBAR_WIDTH_DEFAULT: f32 = 128.0;
+pub const TAG_SIDEBAR_WIDTH_MIN: f32 = 80.0;
+pub const TAG_SIDEBAR_WIDTH_MAX: f32 = 240.0;
+pub const TAG_SIDEBAR_WIDTH_STEP: f32 = 8.0;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemeChoice {
@@ -91,6 +96,7 @@ pub struct Settings {
     pub max_text_lines: usize,
     pub theme: ThemeChoice,
     pub card_radius: f32,
+    pub tag_sidebar_width: f32,
     pub smooth_scroll: bool,
     pub hotkey: HotkeyChoice,
     pub click_action: ClickAction,
@@ -111,6 +117,7 @@ impl Default for Settings {
             max_text_lines: 3,
             theme: ThemeChoice::System,
             card_radius: 6.0,
+            tag_sidebar_width: TAG_SIDEBAR_WIDTH_DEFAULT,
             smooth_scroll: true,
             hotkey: HotkeyChoice::default(),
             click_action: ClickAction::DoubleClick,
@@ -127,6 +134,10 @@ impl Settings {
         self.hover_preview_delay_ms = self.hover_preview_delay_ms.clamp(200, 1_200);
         self.max_text_lines = self.max_text_lines.clamp(2, 5);
         self.card_radius = self.card_radius.clamp(0.0, 24.0);
+        self.tag_sidebar_width = self
+            .tag_sidebar_width
+            .clamp(TAG_SIDEBAR_WIDTH_MIN, TAG_SIDEBAR_WIDTH_MAX)
+            .round();
         self
     }
 }
@@ -237,6 +248,7 @@ mod tests {
         assert!(settings.hover_preview);
         assert_eq!(settings.max_text_lines, 3);
         assert_eq!(settings.theme, ThemeChoice::System);
+        assert_eq!(settings.tag_sidebar_width, TAG_SIDEBAR_WIDTH_DEFAULT);
         assert_eq!(settings.hotkey, HotkeyChoice::CtrlShiftX);
         assert!(settings.clear_search_after_paste);
     }
@@ -247,6 +259,7 @@ mod tests {
             hover_preview_delay_ms: 10,
             max_text_lines: 99,
             card_radius: -8.0,
+            tag_sidebar_width: 999.0,
             ..Settings::default()
         }
         .normalized();
@@ -254,6 +267,14 @@ mod tests {
         assert_eq!(settings.hover_preview_delay_ms, 200);
         assert_eq!(settings.max_text_lines, 5);
         assert_eq!(settings.card_radius, 0.0);
+        assert_eq!(settings.tag_sidebar_width, TAG_SIDEBAR_WIDTH_MAX);
+
+        let settings = Settings {
+            tag_sidebar_width: 10.0,
+            ..Settings::default()
+        }
+        .normalized();
+        assert_eq!(settings.tag_sidebar_width, TAG_SIDEBAR_WIDTH_MIN);
     }
 
     #[test]
@@ -267,6 +288,7 @@ mod tests {
             max_text_lines: 5,
             theme: ThemeChoice::Dark,
             card_radius: 10.0,
+            tag_sidebar_width: 176.0,
             hotkey: HotkeyChoice::Custom("ctrl+alt+c".into()),
             click_action: ClickAction::SingleClick,
             paste_action: PasteAction::CopyOnly,
@@ -289,5 +311,16 @@ mod tests {
         let path = directory.path().join("missing.yaml");
         assert_eq!(load(&path).expect("load"), Settings::default());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn missing_field_uses_defaults() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("settings.yaml");
+        fs::write(&path, "theme: dark\n").expect("write");
+
+        let settings = load(&path).expect("load");
+        assert_eq!(settings.theme, ThemeChoice::Dark);
+        assert_eq!(settings.tag_sidebar_width, TAG_SIDEBAR_WIDTH_DEFAULT);
     }
 }

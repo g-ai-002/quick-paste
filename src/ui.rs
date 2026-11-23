@@ -36,11 +36,16 @@ const ROW_GAP: f32 = 8.0;
 const PIN_SIZE: f32 = 24.0;
 const PIN_INSET: f32 = 6.0;
 const ROW_TEXT_RIGHT: f32 = PIN_SIZE + PIN_INSET + 6.0;
+const TAG_ROW_HEIGHT: f32 = 30.0;
+// 卡片正文按约 48 个半角字符估算换行；列表再窄会让估算失准，因此标签栏不能挤占到这里以下。
+const MIN_MEMO_LIST_WIDTH: f32 = 410.0;
 
 pub struct MemoApp {
     source_path: PathBuf,
     data_path: PathBuf,
     memos: Vec<memo::Memo>,
+    tags: Vec<String>,
+    active_tag: Option<String>,
     settings: settings::Settings,
     filtered: Rc<Vec<usize>>,
     row_sizes: Rc<Vec<Size<Pixels>>>,
@@ -103,6 +108,7 @@ impl MemoApp {
                 Vec::new()
             }
         };
+        let tags = memo::sorted_tags(&memos);
         let filtered = Rc::new(memo::matching_indices(&memos, ""));
         let row_sizes = Rc::new(Self::compute_row_sizes(
             &memos,
@@ -145,6 +151,8 @@ impl MemoApp {
             source_path,
             data_path,
             memos,
+            tags,
+            active_tag: None,
             settings: app_settings,
             filtered,
             row_sizes,
@@ -361,6 +369,92 @@ impl MemoApp {
             .into_any_element()
     }
 
+    fn render_sidebar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let mut items = Vec::with_capacity(self.tags.len() + 1);
+        items.push(self.render_tag_item(None, "全部", cx));
+        for tag in &self.tags {
+            items.push(self.render_tag_item(Some(tag.clone()), tag, cx));
+        }
+
+        let window_width = f32::from(window.bounds().size.width);
+        let width = self
+            .settings
+            .tag_sidebar_width
+            .min(window_width - MIN_MEMO_LIST_WIDTH)
+            .max(settings::TAG_SIDEBAR_WIDTH_MIN);
+        let theme = cx.theme();
+        v_flex()
+            .w(px(width))
+            .h_full()
+            .flex_shrink_0()
+            .border_r_1()
+            .border_color(theme.border)
+            .bg(theme.title_bar)
+            .child(
+                v_flex()
+                    .id("tag-list-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .gap_1()
+                    .p_2()
+                    .overflow_y_scroll()
+                    .children(items),
+            )
+            .into_any_element()
+    }
+
+    fn render_tag_item(
+        &self,
+        tag: Option<String>,
+        label: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selected = self.active_tag == tag;
+        let (selected_bg, selected_fg, sidebar_fg, hover_bg, hover_fg) = {
+            let theme = cx.theme();
+            (
+                theme.sidebar_primary,
+                theme.sidebar_primary_foreground,
+                theme.sidebar_foreground,
+                theme.sidebar_accent,
+                theme.sidebar_accent_foreground,
+            )
+        };
+        let id = match &tag {
+            Some(tag) => SharedString::from(format!("tag-item-{tag}")),
+            None => SharedString::from("tag-item-all"),
+        };
+        let label: SharedString = match &tag {
+            Some(tag) => format!("#{tag}").into(),
+            None => label.to_owned().into(),
+        };
+
+        h_flex()
+            .id(id)
+            .w_full()
+            .h(px(TAG_ROW_HEIGHT))
+            .flex_shrink_0()
+            .items_center()
+            .px_2()
+            .rounded(px(6.0))
+            .text_sm()
+            .cursor_pointer()
+            .when(selected, |this| {
+                this.bg(selected_bg).text_color(selected_fg)
+            })
+            .when(!selected, |this| {
+                this.text_color(sidebar_fg).hover(move |this| {
+                    this.bg(hover_bg).text_color(hover_fg)
+                })
+            })
+            .on_click(cx.listener(move |this, _, _window, cx| {
+                this.select_tag(tag.clone(), cx);
+            }))
+            .child(div().w_full().min_w_0().truncate().child(label))
+            .into_any_element()
+    }
+
     fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.filtered.is_empty() {
             let content = if self.memos.is_empty() {
@@ -374,12 +468,13 @@ impl MemoApp {
                 render_empty_state(
                     IconName::Search,
                     "没有匹配的备忘录",
-                    "换个关键词试试",
+                    "换个关键词或标签试试",
                     cx,
                 )
             };
             return div()
                 .flex_1()
+                .min_w_0()
                 .min_h_0()
                 .w_full()
                 .child(content)
@@ -405,6 +500,7 @@ impl MemoApp {
         .track_scroll(&self.list_scroll)
         .overflow_hidden()
         .flex_1()
+        .min_w_0()
         .min_h_0()
         .w_full();
 
@@ -422,6 +518,7 @@ impl MemoApp {
             .flex()
             .flex_col()
             .flex_1()
+            .min_w_0()
             .min_h_0()
             .w_full()
             .overflow_hidden()
@@ -708,6 +805,14 @@ impl MemoApp {
                 let save_error = memo::save(&self.data_path, &memos).err();
 
                 self.memos = memos;
+                self.tags = memo::sorted_tags(&self.memos);
+                let active_tag = self.active_tag.take().and_then(|active| {
+                    self.tags
+                        .iter()
+                        .find(|tag| tag.to_lowercase() == active.to_lowercase())
+                        .cloned()
+                });
+                self.active_tag = active_tag;
                 self.notice = save_error.map(|error| {
                     SharedString::from(format!("已重新加载，但写入本地状态失败：{error}"))
                 });
@@ -842,11 +947,25 @@ impl MemoApp {
         self.search.focus_handle(cx).focus(window, cx);
     }
 
+    fn select_tag(&mut self, tag: Option<String>, cx: &mut Context<Self>) {
+        if self.active_tag != tag {
+            self.active_tag = tag;
+            self.cancel_preview(cx);
+            self.refresh_filter();
+        }
+        self.scroll_to_top();
+        cx.notify();
+    }
+
     /// 重新计算过滤结果与行高缓存；备忘录或过滤词变化后必须调用。
     fn refresh_filter(&mut self) {
         self.smooth_scroll.reset();
         self.hovered = None;
-        let filtered = memo::matching_indices(&self.memos, &self.filter);
+        let filtered = memo::matching_indices_with_tag(
+            &self.memos,
+            &self.filter,
+            self.active_tag.as_deref(),
+        );
         self.row_sizes = Rc::new(Self::compute_row_sizes(
             &self.memos,
             filtered.as_slice(),
@@ -944,6 +1063,7 @@ impl Render for MemoApp {
         self.smooth_scroll.advance(&self.list_scroll, window);
 
         let toolbar = self.render_toolbar(cx);
+        let sidebar = self.render_sidebar(window, cx);
         let list = self.render_list(cx);
         let footer = self.render_footer(cx);
 
@@ -953,7 +1073,15 @@ impl Render for MemoApp {
             .bg(cx.theme().muted)
             .text_color(cx.theme().foreground)
             .child(toolbar)
-            .child(list)
+            .child(
+                h_flex()
+                    .w_full()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(sidebar)
+                    .child(list),
+            )
             .child(footer)
             .on_key_down(cx.listener(Self::on_key_down))
     }
