@@ -843,17 +843,25 @@ impl SettingsWindow {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (background, foreground, hover_background, muted_foreground) = {
+        let (background, foreground, hover_background, mode_foreground) = {
             let theme = cx.theme();
             (
                 if selected {
-                    theme.muted
+                    theme.secondary
                 } else {
                     theme.background
                 },
-                theme.foreground,
+                if selected {
+                    theme.secondary_foreground
+                } else {
+                    theme.foreground
+                },
                 theme.accent,
-                theme.muted_foreground,
+                if selected {
+                    theme.secondary_foreground
+                } else {
+                    theme.muted_foreground
+                },
             )
         };
         let id = SharedString::from(format!("theme-choice-{value}"));
@@ -879,7 +887,7 @@ impl SettingsWindow {
                 mode.map(|mode| {
                     div()
                         .text_xs()
-                        .text_color(muted_foreground)
+                        .text_color(mode_foreground)
                         .child(mode)
                 }),
             )
@@ -1843,7 +1851,7 @@ impl SettingsWindow {
         let pages = SettingsPage::ALL.into_iter().map(|page| {
             let active = self.active_page == page;
             let icon_color = if active {
-                theme.foreground
+                theme.secondary_foreground
             } else {
                 theme.sidebar_foreground
             };
@@ -1859,7 +1867,7 @@ impl SettingsWindow {
                 .text_sm()
                 .cursor_pointer()
                 .when(active, |this| {
-                    this.bg(theme.muted).text_color(theme.foreground)
+                    this.bg(theme.secondary).text_color(theme.secondary_foreground)
                 })
                 .when(!active, |this| {
                     this.text_color(theme.sidebar_foreground).hover(|style| {

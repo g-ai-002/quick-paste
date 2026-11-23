@@ -485,8 +485,8 @@ impl MemoApp {
         let (selected_bg, selected_fg, sidebar_fg, hover_bg, hover_fg) = {
             let theme = cx.theme();
             (
-                theme.muted,
-                theme.foreground,
+                theme.secondary,
+                theme.secondary_foreground,
                 theme.sidebar_foreground,
                 theme.sidebar_accent,
                 theme.sidebar_accent_foreground,
