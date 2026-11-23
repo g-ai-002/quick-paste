@@ -485,8 +485,8 @@ impl MemoApp {
         let (selected_bg, selected_fg, sidebar_fg, hover_bg, hover_fg) = {
             let theme = cx.theme();
             (
-                theme.sidebar_primary,
-                theme.sidebar_primary_foreground,
+                theme.muted,
+                theme.foreground,
                 theme.sidebar_foreground,
                 theme.sidebar_accent,
                 theme.sidebar_accent_foreground,
@@ -752,13 +752,20 @@ impl MemoApp {
             settings::ClickAction::DoubleClick => "双击粘贴",
             settings::ClickAction::SingleClick => "单击粘贴",
         };
+        let source_label = match self.source.kind() {
+            source::SourceKind::Local => "本地",
+            source::SourceKind::Gitea => "Gitea",
+            source::SourceKind::Gitee => "Gitee",
+            source::SourceKind::GitHub => "GitHub",
+            source::SourceKind::GitLab => "GitLab",
+        };
 
         let hint: String = match (&hotkey.label, &hotkey.error) {
-            (Some(label), _) => {
-                format!("{click_hint} · {label} 显示/隐藏 · 关闭窗口后仍在后台运行")
-            }
-            (None, Some(error)) => format!("{click_hint} · {error}"),
-            (None, None) => click_hint.to_owned(),
+            (Some(label), _) => format!(
+                "数据源：{source_label} · {click_hint} · {label} 显示/隐藏 · 关闭窗口后仍在后台运行"
+            ),
+            (None, Some(error)) => format!("数据源：{source_label} · {click_hint} · {error}"),
+            (None, None) => format!("数据源：{source_label} · {click_hint}"),
         };
         let hint: SharedString = if self.loading {
             format!("{hint} · 正在加载数据源…").into()
