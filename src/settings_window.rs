@@ -820,7 +820,7 @@ impl SettingsWindow {
             items.push(self.theme_row(name.clone(), name, Some(mode), selected, cx));
         }
 
-        div()
+        v_flex()
             .w(px(320.0))
             .max_h(px(220.0))
             .overflow_y_scroll()
