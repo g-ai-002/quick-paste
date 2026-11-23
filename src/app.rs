@@ -108,7 +108,7 @@ pub fn run() {
 
     let data_source = initial_settings.data_source.clone();
     let content_source = source::ContentSource::resolve(&data_source, &paths.memos);
-    logging::write(format!("内容源：{}", content_source.location()));
+    logging::write(format!("数据源：{}", content_source.location()));
     if let Some(error) = data_source.validation_error() {
         logging::write(format!("数据源配置无效：{error}"));
     }

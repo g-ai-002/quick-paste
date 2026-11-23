@@ -290,9 +290,9 @@ const SETTING_META: &[SettingMeta] = &[
     SettingMeta {
         id: "about_source",
         page: SettingsPage::About,
-        title: "内容源",
+        title: "数据源",
         description: "当前使用的数据源；远端地址不显示 TOKEN，程序只读取其中的 text 和 tags。",
-        keywords: &["YAML", "内容源", "memos"],
+        keywords: &["YAML", "数据源", "memos"],
     },
     SettingMeta {
         id: "about_log",

@@ -533,7 +533,7 @@ impl MemoApp {
                 let hint = if self.source.is_remote() {
                     "在远端 memos.yaml 中添加记录，再点「重新加载」"
                 } else {
-                    "在内容源 memos.yaml 中添加记录，再点「重新加载」"
+                    "在数据源 memos.yaml 中添加记录，再点「重新加载」"
                 };
                 render_empty_state(IconName::FileText, "还没有备忘录", hint, cx)
             } else {

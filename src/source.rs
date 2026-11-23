@@ -1,4 +1,4 @@
-//! 内容源：本地 YAML 或 Gitea / Gitee / GitHub / GitLab 上的远端 YAML。
+//! 数据源：本地 YAML 或 Gitea / Gitee / GitHub / GitLab 上的远端 YAML。
 //!
 //! 远端文件只提供 `text` / `tags`；`usage_count` / `is_pinned` 仍保存在
 //! `%LOCALAPPDATA%\QuickPaste\memos.yaml`，因此同一份远端备忘录可以在多台设备间共享，
@@ -241,13 +241,13 @@ pub enum SourceError {
     Content(memo::MemoError),
 }
 
-/// 读取内容源并与本地状态合并；远端读取失败时返回错误，由调用方决定是否使用缓存。
+/// 读取数据源并与本地状态合并；远端读取失败时返回错误，由调用方决定是否使用缓存。
 pub fn load_merged(
     source: &ContentSource,
     config: &DataSourceConfig,
     data_path: &Path,
 ) -> Result<Vec<memo::Memo>, SourceError> {
-    logging::write(format!("加载内容源：{}", source.location()));
+    logging::write(format!("加载数据源：{}", source.location()));
     logging::write(format!("本地状态：{}", data_path.display()));
 
     let mut memos = match source {
@@ -262,7 +262,7 @@ pub fn load_merged(
             if source_path.as_path() != data_path && source_path.exists() {
                 let source_memos = memo::load(source_path).map_err(SourceError::Local)?;
                 logging::write(format!(
-                    "本地内容源读取成功：{} 条",
+                    "本地数据源读取成功：{} 条",
                     source_memos.len()
                 ));
                 let local = memo::load_or_create(data_path).map_err(SourceError::Local)?;
@@ -291,7 +291,7 @@ pub fn load_merged(
 fn fetch_remote(kind: SourceKind, url: &str, token: &str) -> Result<Vec<memo::Memo>, SourceError> {
     let endpoint = request_url(kind, url, token);
     logging::write(format!(
-        "读取远端内容源：{} {}",
+        "读取远端数据源：{} {}",
         kind.label(),
         redact_url(url)
     ));
@@ -340,7 +340,7 @@ fn fetch_remote(kind: SourceKind, url: &str, token: &str) -> Result<Vec<memo::Me
         .map_err(|error| SourceError::Request(format!("读取响应失败：{error}")))?;
     let memos = memo::parse(&content).map_err(SourceError::Content)?;
     logging::write(format!(
-        "远端内容源读取成功：{} 条（{}）",
+        "远端数据源读取成功：{} 条（{}）",
         memos.len(),
         kind.label()
     ));
