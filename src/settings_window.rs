@@ -821,6 +821,7 @@ impl SettingsWindow {
         }
 
         v_flex()
+            .id("appearance-theme-scroll")
             .w(px(320.0))
             .max_h(px(220.0))
             .overflow_y_scroll()
