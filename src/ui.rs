@@ -456,6 +456,7 @@ impl MemoApp {
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        // 右侧列表在横排容器里：flex_1 只分配宽度，高度必须显式撑满，否则会塌缩。
         if self.filtered.is_empty() {
             let content = if self.memos.is_empty() {
                 render_empty_state(
@@ -477,6 +478,7 @@ impl MemoApp {
                 .min_w_0()
                 .min_h_0()
                 .w_full()
+                .h_full()
                 .child(content)
                 .into_any_element();
         }
@@ -521,6 +523,7 @@ impl MemoApp {
             .min_w_0()
             .min_h_0()
             .w_full()
+            .h_full()
             .overflow_hidden()
             .pt_2()
             .on_scroll(cx.listener(Self::on_list_scroll))
