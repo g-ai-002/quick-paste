@@ -1283,11 +1283,6 @@ impl SettingsWindow {
                 "Gitea / Gitee / GitHub / GitLab 的私有仓库需要 TOKEN；公开仓库可以留空。TOKEN 以明文保存在本机 settings.yaml，不会显示在关于页或日志里。",
                 cx,
             ),
-            self.info_card(
-                "自签名证书",
-                "GitLab / Gitea 使用自签名 HTTPS 证书时，先把 CA 证书导入 Windows「受信任的根证书颁发机构」；程序通过系统证书库校验证书。",
-                cx,
-            ),
         ];
         self.page_layout(SettingsPage::DataSource, rows, extra, cx)
     }
