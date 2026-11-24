@@ -32,14 +32,12 @@ use crate::{
 const ROW_LINE_HEIGHT: f32 = 22.0;
 const ROW_FOOTER_HEIGHT: f32 = 16.0;
 const ROW_FOOTER_FONT_SIZE: f32 = 11.0;
-const ROW_DIVIDER_HEIGHT: f32 = 1.0;
-const ROW_DIVIDER_DASH_COUNT: usize = 64;
-const ROW_DIVIDER_DASH_GAP: f32 = 2.0;
 const ROW_MARGIN_X: f32 = 8.0;
 const ROW_PADDING_X: f32 = 12.0;
 const ROW_PADDING_TOP: f32 = 12.0;
-const ROW_PADDING_BOTTOM: f32 = 10.0;
-const ROW_CONTENT_GAP: f32 = 4.0;
+const ROW_PADDING_BOTTOM: f32 = 6.0;
+// 正文与备注/标签行之间留出和卡片顶部相同的间距，底部收紧以突出正文。
+const ROW_TEXT_FOOTER_GAP: f32 = ROW_PADDING_TOP;
 const ROW_GAP: f32 = 8.0;
 const PIN_SIZE: f32 = 28.0;
 const PIN_INSET: f32 = 6.0;
@@ -695,7 +693,6 @@ impl MemoApp {
             (None, Some(tags)) => Some(tags),
             (None, None) => None,
         };
-        let has_footer = footer_text.is_some();
         let max_lines = self.settings.max_text_lines;
         let line_count =
             memo::display_line_count(text.as_ref(), max_lines, self.line_units);
@@ -717,7 +714,7 @@ impl MemoApp {
             .relative()
             .w_full()
             .h(px(card_height))
-            .gap(px(ROW_CONTENT_GAP))
+            .gap(px(ROW_TEXT_FOOTER_GAP))
             .overflow_hidden()
             .rounded(px(card_radius))
             .bg(card_bg)
@@ -769,21 +766,6 @@ impl MemoApp {
                     .line_clamp(line_count)
                     .child(text),
             )
-            .children(has_footer.then(|| {
-                h_flex()
-                    .w_full()
-                    .flex_shrink_0()
-                    .h(px(ROW_DIVIDER_HEIGHT))
-                    .gap(px(ROW_DIVIDER_DASH_GAP))
-                    .overflow_hidden()
-                    .opacity(0.5)
-                    .children((0..ROW_DIVIDER_DASH_COUNT).map(|_| {
-                        div()
-                            .flex_1()
-                            .h(px(ROW_DIVIDER_HEIGHT))
-                            .bg(muted_foreground)
-                    }))
-            }))
             .children(footer_text.map(|footer_text| {
                 div()
                     .w_full()
@@ -1381,7 +1363,7 @@ impl MemoApp {
         let footer = if memo.description.is_empty() && memo.tags.is_empty() {
             0.0
         } else {
-            ROW_CONTENT_GAP * 2.0 + ROW_DIVIDER_HEIGHT + ROW_FOOTER_HEIGHT
+            ROW_TEXT_FOOTER_GAP + ROW_FOOTER_HEIGHT
         };
         ROW_PADDING_TOP
             + lines * ROW_LINE_HEIGHT
