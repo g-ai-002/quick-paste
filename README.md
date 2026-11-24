@@ -1,7 +1,7 @@
 # 备忘快贴
 
 <p align="center">
-  <img src="assets/logo.png" width="96" alt="备忘快贴 logo">
+  <img src="assets/logo.svg" width="96" height="96" alt="备忘快贴 logo">
 </p>
 
 一个只做一件事的 Windows 小工具：把常用的纯文本存成备忘录，双击一下，
@@ -230,8 +230,8 @@ src/
 ├── themes/             21 个内置主题 JSON
 └── ui.rs               标签栏、卡片列表、搜索、置顶、悬停预览调度与粘贴界面
 
-assets/logo.svg         备忘纸 + 图钉 logo（界面内用）
-assets/logo.png         README 与便携包展示用
+assets/logo.svg         备忘纸 + 图钉 logo（界面与 README 用）
+assets/logo.png         备用位图（512×512）
 assets/icon.ico         安装包与可执行文件图标
 scripts/package.ps1     setup + portable 打包
 scripts/generate-icon.ps1  从 logo 设计生成 PNG / ICO
