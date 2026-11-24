@@ -252,9 +252,11 @@ function Get-IconBmpData {
             $sourceRow = $y * $stride
             for ($x = 0; $x -lt $width; $x++) {
                 $offset = $sourceRow + $x * 4
-                $writer.Write($pixels[$offset + 2])
-                $writer.Write($pixels[$offset + 1])
+                # Format32bppArgb 的内存布局是 B,G,R,A；ICO 位图同样按 B,G,R,A 存放，
+                # 直接按字节序写出即可，曾经把 +2 当作 B 写入导致红蓝通道互换。
                 $writer.Write($pixels[$offset + 0])
+                $writer.Write($pixels[$offset + 1])
+                $writer.Write($pixels[$offset + 2])
                 $writer.Write($pixels[$offset + 3])
             }
         }
