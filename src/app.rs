@@ -172,6 +172,11 @@ pub fn run() {
             logging::write("主窗口创建成功。");
             // 窗口以 show: false 创建：先去掉任务栏样式再显示，避免任务栏出现按钮。
             paste::apply_main_window_taskbar_style();
+            // 隐藏创建的窗口原生尺寸不可靠，显示前按设置的逻辑尺寸显式定位。
+            paste::position_main_window(
+                initial_settings.window_width,
+                initial_settings.window_height,
+            );
             if !initial_settings.start_hidden {
                 paste::show_main_window();
             }
@@ -237,9 +242,6 @@ fn spawn_tray_task(
     cx.spawn(async move |cx| {
         while let Ok(command) = receiver.recv().await {
             match command {
-                tray::TrayCommand::ToggleMainWindow => {
-                    let _ = view.update(cx, |view, cx| view.on_tray_toggle(cx));
-                }
                 tray::TrayCommand::ShowMainWindow => {
                     let _ = view.update(cx, |view, cx| view.on_show_request(cx));
                 }

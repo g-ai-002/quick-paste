@@ -1,12 +1,9 @@
 use std::{
     ffi::c_void,
     mem::size_of,
-    sync::{
-        Mutex,
-        atomic::{AtomicIsize, Ordering},
-    },
+    sync::atomic::{AtomicIsize, Ordering},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use gpui_kit::Window;
@@ -15,9 +12,11 @@ use windows::Win32::{
     Foundation::{HWND, POINT, RECT},
     Graphics::Gdi::{
         GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+        MonitorFromWindow,
     },
     System::Threading::GetCurrentProcessId,
     UI::{
+        HiDpi::GetDpiForWindow,
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
             KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_V,
@@ -26,7 +25,7 @@ use windows::Win32::{
             GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
             GetWindowThreadProcessId, GWL_EXSTYLE, IsIconic, IsWindow, IsWindowVisible,
             SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
-            SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_RESTORE, SW_SHOW,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_RESTORE, SW_SHOW,
             SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
         },
     },
@@ -34,11 +33,6 @@ use windows::Win32::{
 
 static MAIN_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static LAST_TARGET: AtomicIsize = AtomicIsize::new(0);
-// 记录主窗口最近一次被隐藏的时刻，供托盘左键切换区分“刚因失焦自动隐藏”。
-static MAIN_WINDOW_LAST_HIDDEN: Mutex<Option<Instant>> = Mutex::new(None);
-
-/// 判定窗口“刚被隐藏”的时间窗。
-const RECENTLY_HIDDEN_WINDOW: Duration = Duration::from_millis(400);
 
 pub fn start_foreground_tracker() {
     thread::Builder::new()
@@ -84,20 +78,59 @@ pub fn apply_main_window_taskbar_style() {
     }
 }
 
-/// 主窗口是否在最近一次定义的时间窗内被隐藏过。
+/// 按逻辑尺寸把主窗口定位到其所在显示器的工作区中央。
 ///
-/// 点击托盘图标会把前台交给任务栏，失焦自动隐藏可能先于托盘事件触发；
-/// 此时托盘左键的“显示/隐藏”切换应视为已隐藏，不再重复处理。
-pub fn main_window_hidden_recently() -> bool {
-    let Ok(hidden) = MAIN_WINDOW_LAST_HIDDEN.lock() else {
-        return false;
-    };
-    hidden.is_some_and(|at| at.elapsed() < RECENTLY_HIDDEN_WINDOW)
-}
+/// gpui 隐藏创建（`show: false`）的窗口在首次显示前拿到的原生尺寸不可靠
+/// （可能落在系统默认大小，接近满屏），显示前必须用逻辑尺寸×窗口 DPI 显式设定。
+pub fn position_main_window(width: f32, height: f32) {
+    let hwnd = MAIN_WINDOW.load(Ordering::Relaxed);
+    if hwnd == 0 || !width.is_finite() || !height.is_finite() {
+        return;
+    }
+    let handle = HWND(hwnd as *mut c_void);
+    // SAFETY: hwnd 是本进程记录的窗口句柄；DPI、显示器信息与矩形都写入栈上变量。
+    unsafe {
+        let dpi = GetDpiForWindow(handle);
+        let scale = (dpi.max(96) as f32) / 96.0;
+        let width = (width * scale).round() as i32;
+        let height = (height * scale).round() as i32;
+        if width <= 0 || height <= 0 {
+            return;
+        }
 
-fn note_main_window_hidden() {
-    if let Ok(mut hidden) = MAIN_WINDOW_LAST_HIDDEN.lock() {
-        *hidden = Some(Instant::now());
+        let monitor = MonitorFromWindow(handle, MONITOR_DEFAULTTONEAREST);
+        if monitor.0.is_null() {
+            let _ = SetWindowPos(
+                handle,
+                None,
+                0,
+                0,
+                width,
+                height,
+                SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+            return;
+        }
+
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return;
+        }
+        let work = info.rcWork;
+        let x = work.left + (work.right - work.left - width).max(0) / 2;
+        let y = work.top + (work.bottom - work.top - height).max(0) / 2;
+        let _ = SetWindowPos(
+            handle,
+            None,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        );
     }
 }
 
@@ -197,7 +230,6 @@ pub fn hide_window(window: &Window) {
         return;
     };
     hide_window_now(hwnd);
-    note_main_window_hidden();
     crate::memory_trim::schedule_hidden_trim();
 }
 
@@ -207,7 +239,6 @@ pub fn hide_main_window() {
         return;
     }
     hide_window_now(hwnd);
-    note_main_window_hidden();
     crate::memory_trim::schedule_hidden_trim();
 }
 

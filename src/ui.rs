@@ -256,23 +256,6 @@ impl MemoApp {
         }
     }
 
-    /// 托盘左键：显示或隐藏主窗口。
-    pub fn on_tray_toggle(&mut self, cx: &mut Context<Self>) {
-        let visible = paste::is_main_window_visible();
-        if visible && paste::main_window_hidden_recently() {
-            // 点击托盘刚触发失焦自动隐藏，再切换会立刻把窗口弹回来。
-            return;
-        }
-        if visible {
-            self.commit_window_size(cx);
-            self.window_active = false;
-            self.cancel_preview(cx);
-            paste::hide_main_window();
-        } else {
-            self.on_show_request(cx);
-        }
-    }
-
     pub fn on_show_request(&mut self, cx: &mut Context<Self>) {
         self.commit_window_size(cx);
         self.cancel_preview(cx);
@@ -906,7 +889,7 @@ impl MemoApp {
                     .child(
                         Button::new("reload-memos")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::RefreshCw)
                             .tooltip("重新加载 YAML")
                             .on_click(cx.listener(Self::reload_clicked)),
@@ -914,7 +897,7 @@ impl MemoApp {
                     .child(
                         Button::new("open-data")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::FolderOpen)
                             .tooltip("打开本地状态文件")
                             .on_click(cx.listener(Self::open_data_file)),
@@ -922,7 +905,7 @@ impl MemoApp {
                     .child(
                         Button::new("open-settings")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::Settings)
                             .tooltip("设置")
                             .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
@@ -930,7 +913,7 @@ impl MemoApp {
                     .child(
                         Button::new("quit-app")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .label("退出")
                             .on_click(cx.listener(Self::quit)),
                     ),

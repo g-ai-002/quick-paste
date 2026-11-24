@@ -195,7 +195,7 @@ const SETTING_META: &[SettingMeta] = &[
         id: "tray_icon",
         page: SettingsPage::General,
         title: "托盘图标",
-        description: "在任务栏通知区显示图标：左键显示或隐藏主窗口，右键打开菜单。",
+        description: "在任务栏通知区显示图标：左键打开设置，右键打开菜单。",
         keywords: &["托盘", "通知区", "图标", "菜单", "右键"],
     },
     SettingMeta {
@@ -2051,14 +2051,6 @@ impl SettingsWindow {
             .border_color(theme.border)
             .bg(theme.title_bar)
             .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap_2()
-                    .child(brand::logo(22.0))
-                    .child(div().text_sm().font_semibold().child(brand::NAME)),
-            )
-            .child(
                 Input::new(&self.search)
                     .small()
                     .w_full()
@@ -2080,11 +2072,18 @@ impl SettingsWindow {
             .child(
                 v_flex()
                     .w_full()
-                    .gap_0()
+                    .gap_2()
                     .border_t_1()
                     .border_color(theme.border)
                     .pt_3()
-                    .child(div().text_sm().child(brand::NAME))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap_2()
+                            .child(brand::logo(22.0))
+                            .child(div().text_sm().font_semibold().child(brand::NAME)),
+                    )
                     .child(
                         div()
                             .text_xs()

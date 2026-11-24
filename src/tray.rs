@@ -1,4 +1,4 @@
-//! 系统托盘：通知区图标、左键切换主窗口、右键原生菜单。
+//! 系统托盘：通知区图标、左键打开设置窗口、右键原生菜单。
 //!
 //! 图标常驻但可按设置隐藏；托盘与菜单事件都经由通道转回 GPUI 更新上下文，
 //! 避免在 Win32 回调里直接操作窗口。
@@ -24,11 +24,10 @@ mod windows_impl {
     /// 托盘事件翻译成应用命令后交给 app.rs 分发。
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum TrayCommand {
-        /// 左键点击：显示或隐藏主窗口。
-        ToggleMainWindow,
+        /// 左键点击：打开设置窗口。
+        OpenSettings,
         /// 菜单「打开主窗口」：只显示主窗口。
         ShowMainWindow,
-        OpenSettings,
         Quit,
     }
 
@@ -125,7 +124,7 @@ mod windows_impl {
             .map_err(|error| format!("转换托盘图标失败：{error}"))
     }
 
-    /// 左键抬起时切换主窗口；右键菜单由系统直接弹出，事件忽略。
+    /// 左键抬起时打开设置窗口；右键菜单由系统直接弹出，事件忽略。
     fn click_command(event: TrayIconEvent) -> Option<TrayCommand> {
         let TrayIconEvent::Click {
             button,
@@ -136,7 +135,7 @@ mod windows_impl {
             return None;
         };
         match button {
-            MouseButton::Left => Some(TrayCommand::ToggleMainWindow),
+            MouseButton::Left => Some(TrayCommand::OpenSettings),
             _ => None,
         }
     }
@@ -172,9 +171,8 @@ mod stub {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum TrayCommand {
-        ToggleMainWindow,
-        ShowMainWindow,
         OpenSettings,
+        ShowMainWindow,
         Quit,
     }
 
