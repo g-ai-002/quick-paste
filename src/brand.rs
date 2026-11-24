@@ -16,8 +16,6 @@ pub fn logo(size: f32) -> AnyElement {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn logo_is_valid_svg() {
         let svg = include_str!("../assets/logo.svg");
