@@ -852,9 +852,9 @@ impl MemoApp {
         };
 
         let hint: String = match (&hotkey.label, &hotkey.error) {
-            (Some(label), _) => format!(
-                "数据源：{source_label} · {click_hint} · {label} 显示/隐藏 · 关闭窗口后仍在后台运行"
-            ),
+            (Some(label), _) => {
+                format!("数据源：{source_label} · {click_hint} · {label} 显示/隐藏")
+            }
             (None, Some(error)) => format!("数据源：{source_label} · {click_hint} · {error}"),
             (None, None) => format!("数据源：{source_label} · {click_hint}"),
         };
