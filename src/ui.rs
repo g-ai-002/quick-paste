@@ -33,6 +33,8 @@ const ROW_LINE_HEIGHT: f32 = 22.0;
 const ROW_FOOTER_HEIGHT: f32 = 16.0;
 const ROW_FOOTER_FONT_SIZE: f32 = 11.0;
 const ROW_DIVIDER_HEIGHT: f32 = 1.0;
+const ROW_DIVIDER_DASH_COUNT: usize = 64;
+const ROW_DIVIDER_DASH_GAP: f32 = 2.0;
 const ROW_MARGIN_X: f32 = 8.0;
 const ROW_PADDING_X: f32 = 12.0;
 const ROW_PADDING_TOP: f32 = 12.0;
@@ -683,10 +685,17 @@ impl MemoApp {
                     .join("  "),
             ))
         };
-        let has_footer = description.is_some() || tags.is_some();
-        let both_footer_parts = description.is_some() && tags.is_some();
-        let footer_content_width = self.line_units as f32 * 7.2 + ROW_TEXT_RIGHT;
-        let tags_max_width = (footer_content_width * 0.5).max(96.0);
+        let footer_text = match (description, tags) {
+            (Some(description), Some(tags)) => Some(SharedString::from(format!(
+                "{}  {}",
+                description.as_ref(),
+                tags.as_ref()
+            ))),
+            (Some(description), None) => Some(description),
+            (None, Some(tags)) => Some(tags),
+            (None, None) => None,
+        };
+        let has_footer = footer_text.is_some();
         let max_lines = self.settings.max_text_lines;
         let line_count =
             memo::display_line_count(text.as_ref(), max_lines, self.line_units);
@@ -702,7 +711,6 @@ impl MemoApp {
         let primary = cx.theme().primary;
         let pin_hover_bg = cx.theme().muted;
         let muted_foreground = cx.theme().muted_foreground;
-        let border = cx.theme().border;
 
         let card = v_flex()
             .id(("memo-card", index))
@@ -762,44 +770,30 @@ impl MemoApp {
                     .child(text),
             )
             .children(has_footer.then(|| {
-                div()
+                h_flex()
                     .w_full()
                     .flex_shrink_0()
                     .h(px(ROW_DIVIDER_HEIGHT))
-                    .border_t_1()
-                    .border_dashed()
-                    .border_color(border)
-                    .opacity(0.7)
+                    .gap(px(ROW_DIVIDER_DASH_GAP))
+                    .overflow_hidden()
+                    .opacity(0.5)
+                    .children((0..ROW_DIVIDER_DASH_COUNT).map(|_| {
+                        div()
+                            .flex_1()
+                            .h(px(ROW_DIVIDER_HEIGHT))
+                            .bg(muted_foreground)
+                    }))
             }))
-            .children(has_footer.then(|| {
-                h_flex()
+            .children(footer_text.map(|footer_text| {
+                div()
                     .w_full()
                     .min_w_0()
                     .h(px(ROW_FOOTER_HEIGHT))
-                    .items_center()
-                    .gap(px(8.0))
+                    .truncate()
                     .text_size(px(ROW_FOOTER_FONT_SIZE))
                     .line_height(px(ROW_FOOTER_HEIGHT))
                     .text_color(muted_foreground)
-                    .children(description.map(|description| {
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(description)
-                    }))
-                    .children(tags.map(|tags| {
-                        let tags = div()
-                            .min_w_0()
-                            .truncate()
-                            .text_right()
-                            .child(tags);
-                        if both_footer_parts {
-                            tags.max_w(px(tags_max_width))
-                        } else {
-                            tags.flex_1()
-                        }
-                    }))
+                    .child(footer_text)
             }))
             .children((pinned || hovered).then(|| {
                 div()
