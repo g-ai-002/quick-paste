@@ -2072,7 +2072,6 @@ impl SettingsWindow {
             .child(
                 v_flex()
                     .w_full()
-                    .gap_2()
                     .border_t_1()
                     .border_color(theme.border)
                     .pt_3()
@@ -2081,14 +2080,18 @@ impl SettingsWindow {
                             .w_full()
                             .items_center()
                             .gap_2()
-                            .child(brand::logo(22.0))
-                            .child(div().text_sm().font_semibold().child(brand::NAME)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                            .child(brand::logo(32.0))
+                            .child(
+                                v_flex()
+                                    .min_w_0()
+                                    .child(div().text_sm().font_semibold().child(brand::NAME))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                                    ),
+                            ),
                     ),
             )
             .into_any_element()
