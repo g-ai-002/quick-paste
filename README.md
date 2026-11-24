@@ -131,8 +131,8 @@ GitLab / Gitea 使用自签名 HTTPS 证书时，先把 CA 证书导入 Windows
 `%LOCALAPPDATA%\QuickPaste\memos.yaml` 保存合并后的完整记录，包括备注、使用次数和置顶状态。
 无论数据源在本地还是远端，程序都会把数据源里的 `text` / `description` / `tags`
 与本地状态里的 `usage_count` / `is_pinned` 合并，再写回本地状态文件。
-可执行文件名与数据目录沿用旧名 `quick-paste.exe` / `QuickPaste`，界面与安装包显示为
-「备忘快贴」，以兼容既有快捷方式、设置和备忘录。
+可执行文件为 `quick-paste.exe`，数据目录为 `%LOCALAPPDATA%\QuickPaste\`，
+界面与安装包显示为「备忘快贴」。
 
 - 远端数据源只读取 `text` / `description` / `tags`；使用次数和置顶状态按设备各自维护，不写回远端。
 - 远端数据源启动时先显示本地缓存，再在后台拉取远端文件；网络失败时保留缓存并提示。
