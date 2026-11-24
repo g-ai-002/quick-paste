@@ -35,8 +35,9 @@ const ROW_FOOTER_FONT_SIZE: f32 = 11.0;
 const ROW_MARGIN_X: f32 = 8.0;
 const ROW_PADDING_X: f32 = 12.0;
 const ROW_PADDING_TOP: f32 = 12.0;
+// 有备注/标签时底部收紧以突出正文；纯正文卡片上下留白保持一致。
 const ROW_PADDING_BOTTOM: f32 = 6.0;
-// 正文与备注/标签行之间留出和卡片顶部相同的间距，底部收紧以突出正文。
+// 正文与备注/标签行之间留出和卡片顶部相同的间距。
 const ROW_TEXT_FOOTER_GAP: f32 = ROW_PADDING_TOP;
 const ROW_GAP: f32 = 8.0;
 const PIN_SIZE: f32 = 28.0;
@@ -720,7 +721,11 @@ impl MemoApp {
             .bg(card_bg)
             .px(px(ROW_PADDING_X))
             .pt(px(ROW_PADDING_TOP))
-            .pb(px(ROW_PADDING_BOTTOM))
+            .pb(px(if footer_text.is_some() {
+                ROW_PADDING_BOTTOM
+            } else {
+                ROW_PADDING_TOP
+            }))
             .when(hovered, |this| this.shadow_sm())
             .on_hover(cx.listener(move |this, is_hovered: &bool, window, cx| {
                 let next = if *is_hovered {
@@ -1360,16 +1365,18 @@ impl MemoApp {
     ) -> f32 {
         let lines =
             memo::display_line_count(&memo.text, settings.max_text_lines, line_units) as f32;
-        let footer = if memo.description.is_empty() && memo.tags.is_empty() {
-            0.0
-        } else {
+        let has_footer = !(memo.description.is_empty() && memo.tags.is_empty());
+        let footer = if has_footer {
             ROW_TEXT_FOOTER_GAP + ROW_FOOTER_HEIGHT
+        } else {
+            0.0
         };
-        ROW_PADDING_TOP
-            + lines * ROW_LINE_HEIGHT
-            + footer
-            + ROW_PADDING_BOTTOM
-            + ROW_GAP
+        let padding_bottom = if has_footer {
+            ROW_PADDING_BOTTOM
+        } else {
+            ROW_PADDING_TOP
+        };
+        ROW_PADDING_TOP + lines * ROW_LINE_HEIGHT + footer + padding_bottom + ROW_GAP
     }
 }
 
