@@ -1,6 +1,6 @@
 [package]
 name = "quick-paste"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 description = "备忘快贴：把纯文本备忘录一键粘贴到刚才的输入框"
 license = "MIT"
