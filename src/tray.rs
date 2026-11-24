@@ -9,6 +9,7 @@ mod windows_impl {
 
     use async_channel::Sender;
     use gpui_kit::{App, Global};
+    use tray_icon::menu::accelerator::Accelerator;
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, MenuId};
     use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
