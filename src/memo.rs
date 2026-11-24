@@ -215,9 +215,9 @@ pub fn sorted_tags(memos: &[Memo]) -> Vec<String> {
 
 /// 把卡片正文的可用宽度换算成“半角字符单位”。
 ///
-/// 正文使用 14px 字号，半角字符平均约 7.2px，中文等全角字符按 2 个单位计算。
+/// 正文使用 14px 字号，半角字符平均约 6.4px；中文等全角字符约 2.3 个单位。
 pub fn line_units_for_width(width: f32) -> usize {
-    const HALF_WIDTH_PX: f32 = 7.2;
+    const HALF_WIDTH_PX: f32 = 6.4;
 
     ((width.max(1.0) / HALF_WIDTH_PX).floor() as usize).max(1)
 }
@@ -234,18 +234,35 @@ pub fn is_truncated(text: &str, max: usize, line_units: usize) -> bool {
 }
 
 fn wrapped_line_count(text: &str, line_units: usize) -> usize {
-    // 中文等全角字符按 2 个半角单位计算；空行也占一行。
-    let line_units = line_units.max(1);
+    // 空行也占一行。
+    let line_units = line_units.max(1) as f32;
 
     text.lines()
         .map(|line| {
-            let units: usize = line
-                .chars()
-                .map(|ch| if ch.is_ascii() { 1 } else { 2 })
-                .sum();
-            units.max(1).div_ceil(line_units)
+            let units: f32 = line.chars().map(char_units).sum();
+            (units.max(1.0) / line_units).ceil() as usize
         })
         .sum()
+}
+
+/// 单个字符的估算宽度，单位与 `line_units_for_width` 一致。
+///
+/// 按 14px 字号下 Segoe UI 的实际字宽分档，避免统一按 7.2px 估算时
+/// 把长 ASCII 命令多算出一行。
+fn char_units(ch: char) -> f32 {
+    if !ch.is_ascii() {
+        return 2.3;
+    }
+
+    match ch {
+        ' ' => 0.66,
+        'i' | 'l' | 'j' | 't' | 'f' | 'r' | 'I' | '!' | '.' | ',' | ':' | ';' | '|' | '\'' => 0.63,
+        'm' | 'w' | 'M' | 'W' => 2.0,
+        'A'..='Z' => 1.34,
+        '0'..='9' => 1.18,
+        'a'..='z' => 1.08,
+        _ => 0.98,
+    }
 }
 
 fn normalize(memos: Vec<Memo>) -> Vec<Memo> {
@@ -583,25 +600,33 @@ memos:
         assert_eq!(display_line_count("一\n二\n三\n四", 3, 48), 3);
         assert_eq!(display_line_count("一\n\n三", 3, 48), 3);
 
-        assert_eq!(display_line_count(&"a".repeat(48), 3, 48), 1);
-        assert_eq!(display_line_count(&"a".repeat(49), 3, 48), 2);
-        assert_eq!(display_line_count(&"中".repeat(24), 3, 48), 1);
-        assert_eq!(display_line_count(&"中".repeat(25), 3, 48), 2);
+        assert_eq!(display_line_count(&"a".repeat(44), 3, 48), 1);
+        assert_eq!(display_line_count(&"a".repeat(45), 3, 48), 2);
+        assert_eq!(display_line_count(&"中".repeat(20), 3, 48), 1);
+        assert_eq!(display_line_count(&"中".repeat(21), 3, 48), 2);
         assert_eq!(display_line_count(&"中".repeat(200), 3, 48), 3);
     }
 
     #[test]
     fn converts_card_width_to_half_width_units() {
         assert_eq!(line_units_for_width(0.0), 1);
-        assert_eq!(line_units_for_width(536.0), 74);
+        assert_eq!(line_units_for_width(536.0), 83);
         assert_eq!(
             display_line_count(&"a".repeat(70), 3, line_units_for_width(536.0)),
             1
         );
         assert_eq!(
-            display_line_count(&"a".repeat(75), 3, line_units_for_width(536.0)),
+            display_line_count(&"a".repeat(80), 3, line_units_for_width(536.0)),
             2
         );
+    }
+
+    #[test]
+    fn long_ascii_command_does_not_reserve_an_extra_line() {
+        let text = r#"find . -maxdepth 1 -type f -name "*.yaml" -exec cat {} >> result.txt \; -exec echo >> result.txt \; -exec echo '---' >> result.txt \; -exec echo >> result.txt \;"#;
+        let units = line_units_for_width(536.0);
+        assert_eq!(display_line_count(text, 3, units), 2);
+        assert!(is_truncated(text, 1, units));
     }
 
     #[test]
@@ -609,8 +634,8 @@ memos:
         assert!(!is_truncated("短文本", 3, 48));
         assert!(!is_truncated("一\n二\n三", 3, 48));
         assert!(is_truncated("一\n二\n三\n四", 3, 48));
-        assert!(is_truncated(&"a".repeat(49), 1, 48));
-        assert!(!is_truncated(&"a".repeat(48), 1, 48));
+        assert!(is_truncated(&"a".repeat(45), 1, 48));
+        assert!(!is_truncated(&"a".repeat(44), 1, 48));
         assert!(!is_truncated(
             &"a".repeat(70),
             3,
