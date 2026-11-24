@@ -12,7 +12,7 @@ use gpui_kit::{
 
 use crate::paste;
 
-const PREVIEW_WIDTH: f32 = 380.0;
+const PREVIEW_WIDTH: f32 = 520.0;
 const PREVIEW_HEIGHT: f32 = 420.0;
 
 pub struct PreviewContent {
