@@ -586,7 +586,7 @@ impl SettingsWindow {
         self.highlight = None;
         self.recording_hotkey = false;
         self.clear_search_value(window, cx);
-        self.search.focus_handle(cx).focus(window, cx);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
