@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="tile" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5B8CFF"/>
+      <stop offset="1" stop-color="#2F55D4"/>
+    </linearGradient>
+    <linearGradient id="sheet" x1="16" y1="12" x2="48" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E8EFFF"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="-7" y1="-11" x2="7" y2="10" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD166"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#tile)"/>
+  <path d="M16 13h26l9 9v29a5 5 0 0 1-5 5H16a5 5 0 0 1-5-5V16a5 5 0 0 1 5-5Z" fill="#1E3A8A" opacity="0.22"/>
+  <path d="M16 11h26l9 9v29a5 5 0 0 1-5 5H16a5 5 0 0 1-5-5V16a5 5 0 0 1 5-5Z" fill="url(#sheet)"/>
+  <path d="M42 11v9h9l-9-9Z" fill="#C9D8FF"/>
+  <rect x="19" y="27" width="24" height="3.2" rx="1.6" fill="#6D8BFF"/>
+  <rect x="19" y="34.5" width="19" height="3.2" rx="1.6" fill="#A9BCF5"/>
+  <rect x="19" y="42" width="14" height="3.2" rx="1.6" fill="#A9BCF5"/>
+  <g transform="translate(43 14) rotate(38)">
+    <ellipse cx="0" cy="-6" rx="7.2" ry="5.2" fill="url(#pin)"/>
+    <ellipse cx="-2.2" cy="-7.2" rx="2.6" ry="1.5" fill="#FFF4C7" opacity="0.85"/>
+    <path d="M-4.2 -2.2h8.4l-2.2 9.2h-4L-4.2-2.2Z" fill="#F59E0B"/>
+    <rect x="-1.1" y="6.4" width="2.2" height="9.6" rx="1.1" fill="#D97706"/>
+    <path d="m0 15.2 1.8 4.2H-1.8L0 15.2Z" fill="#B45309"/>
+  </g>
+</svg>

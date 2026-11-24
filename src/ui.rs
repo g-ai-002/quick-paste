@@ -26,7 +26,7 @@ use gpui_kit::{
 
 use self::smooth_scroll::SmoothScroll;
 use crate::{
-    hotkey, logging, memo, paste, preview, settings, settings_window, source,
+    brand, hotkey, logging, memo, paste, preview, settings, settings_window, source,
 };
 
 const ROW_LINE_HEIGHT: f32 = 22.0;
@@ -439,10 +439,21 @@ impl MemoApp {
                 h_flex()
                     .w_full()
                     .child(
-                        div()
-                            .w(px(12.0))
+                        h_flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap_2()
+                            .pl(px(12.0))
+                            .pr(px(12.0))
                             .self_stretch()
-                            .window_control_area(WindowControlArea::Drag),
+                            .window_control_area(WindowControlArea::Drag)
+                            .child(brand::logo(24.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_semibold()
+                                    .child(brand::NAME),
+                            ),
                     )
                     .child(
                         div()

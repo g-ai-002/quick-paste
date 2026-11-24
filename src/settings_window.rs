@@ -23,6 +23,7 @@ use gpui_kit::{
 };
 
 use crate::{
+    brand,
     hotkey::{self, HotkeyChoice},
     logging, memo,
     settings::{self, ClickAction, PasteAction, Settings},
@@ -76,7 +77,7 @@ impl SettingsPage {
             Self::Preview => "预览",
             Self::Appearance => "外观",
             Self::Shortcuts => "快捷键",
-            Self::QuickPaste => "快速粘贴",
+            Self::QuickPaste => "粘贴",
             Self::About => "关于",
         }
     }
@@ -1693,7 +1694,8 @@ impl SettingsWindow {
 
     fn render_about(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut rows = Vec::new();
-        let muted_foreground = cx.theme().muted_foreground;
+        let theme = cx.theme();
+        let muted_foreground = theme.muted_foreground;
 
         let version = div()
             .text_sm()
@@ -1838,11 +1840,33 @@ impl SettingsWindow {
         let license_control = div().text_sm().child("MIT").into_any_element();
         rows.push(self.setting_row(meta("about_license"), license_control, cx));
 
-        let extra = vec![self.info_card(
-            "快速粘贴",
-            "把常用文本存成备忘录，双击即可粘贴回刚才的输入框。所有数据都保存在本机。",
-            cx,
-        )];
+        let brand_card = h_flex()
+            .w_full()
+            .gap_3()
+            .items_center()
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.title_bar)
+            .p_3()
+            .child(brand::logo(44.0))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(div().text_lg().font_semibold().child(brand::NAME))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted_foreground)
+                            .child(
+                                "把常用文本存成备忘录，双击即可粘贴回刚才的输入框。所有数据都保存在本机。",
+                            ),
+                    ),
+            )
+            .into_any_element();
+        let extra = vec![brand_card];
         self.page_layout(SettingsPage::About, rows, extra, cx)
     }
 
@@ -1898,6 +1922,14 @@ impl SettingsWindow {
             .border_color(theme.border)
             .bg(theme.title_bar)
             .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .child(brand::logo(22.0))
+                    .child(div().text_sm().font_semibold().child(brand::NAME)),
+            )
+            .child(
                 Input::new(&self.search)
                     .small()
                     .w_full()
@@ -1923,7 +1955,7 @@ impl SettingsWindow {
                     .border_t_1()
                     .border_color(theme.border)
                     .pt_3()
-                    .child(div().text_sm().child("快速粘贴"))
+                    .child(div().text_sm().child(brand::NAME))
                     .child(
                         div()
                             .text_xs()

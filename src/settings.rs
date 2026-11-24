@@ -14,7 +14,7 @@ use crate::hotkey::HotkeyChoice;
 use crate::source::DataSourceConfig;
 
 const HEADER: &str = "\
-# 快速粘贴 · 设置
+# 备忘快贴 · 设置
 # 由程序自动维护；手动修改后重启程序生效。
 # 远端数据源的 TOKEN 会以明文保存在本文件。
 ";
@@ -377,7 +377,7 @@ mod tests {
         assert_eq!(load(&path).expect("load"), settings);
 
         let content = fs::read_to_string(&path).expect("read");
-        assert!(content.starts_with("# 快速粘贴"));
+        assert!(content.starts_with("# 备忘快贴"));
     }
 
     #[test]

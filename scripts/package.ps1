@@ -184,7 +184,7 @@ try {
             New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
             $productName = [string]$config['product-name']
             if ([string]::IsNullOrWhiteSpace($productName)) {
-                $productName = 'QuickPaste'
+                $productName = '备忘快贴'
             }
             $stageDirectory = Join-Path $outputDirectory ".portable-$([guid]::NewGuid().ToString('N'))"
             $portableRoot = Join-Path $stageDirectory $productName
@@ -197,6 +197,10 @@ try {
                 }
                 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $portableRoot
                 Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination $portableRoot
+                $assetsDirectory = Join-Path $projectRoot 'assets'
+                if (Test-Path -LiteralPath $assetsDirectory -PathType Container) {
+                    Copy-Item -LiteralPath $assetsDirectory -Destination $portableRoot -Recurse
+                }
                 Compress-Archive -LiteralPath $portableRoot -DestinationPath $archivePath -CompressionLevel Optimal -Force
                 if (!(Test-Path -LiteralPath $archivePath -PathType Leaf) -or (Get-Item -LiteralPath $archivePath).Length -eq 0) {
                     throw "便携 ZIP 生成失败：$archivePath"

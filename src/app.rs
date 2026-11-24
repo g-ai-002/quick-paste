@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 
 use crate::{
-    hotkey, logging, memo, memory_trim, paste, preview, settings, settings_window,
+    brand, hotkey, logging, memo, memory_trim, paste, preview, settings, settings_window,
     single_instance::SingleInstance,
     source,
     themes,
@@ -59,7 +59,8 @@ pub fn run() {
     }
     logging::init(paths.app_log.clone());
     logging::write(format!(
-        "启动 Quick Paste v{}（日志时间为 UTC）",
+        "启动 {} v{}（日志时间为 UTC）",
+        brand::NAME,
         env!("CARGO_PKG_VERSION")
     ));
     logging::write(format!(
