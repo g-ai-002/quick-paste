@@ -5,8 +5,14 @@ use std::{
     io,
     path::{Path, PathBuf},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+/// 提权重启时传给新实例：等旧实例退出并释放锁文件后再取得单实例。
+pub const WAIT_FOR_INSTANCE_ARGUMENT: &str = "--wait-instance";
+
+/// 等待旧实例退出的超时时间。
+const WAIT_FOR_INSTANCE_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct SingleInstance {
     _lock: File,
@@ -15,7 +21,10 @@ pub struct SingleInstance {
 
 impl SingleInstance {
     /// 取得单实例锁；已有实例时写入唤回标记并返回 `Ok(None)`。
-    pub fn acquire(runtime_directory: &Path) -> io::Result<Option<Self>> {
+    ///
+    /// `wait_for_instance` 用于提权重启：新实例等旧实例退出锁文件后再继续，
+    /// 等待超时按普通重复启动处理。
+    pub fn acquire(runtime_directory: &Path, wait_for_instance: bool) -> io::Result<Option<Self>> {
         fs::create_dir_all(runtime_directory)?;
 
         // 锁文件不能删除，否则两个进程可能分别锁住不同的文件。
@@ -32,6 +41,12 @@ impl SingleInstance {
                 activation_path: runtime_directory.join("activate"),
             })),
             Err(TryLockError::WouldBlock) => {
+                if wait_for_instance && wait_for_lock(&lock).is_ok() {
+                    return Ok(Some(Self {
+                        _lock: lock,
+                        activation_path: runtime_directory.join("activate"),
+                    }));
+                }
                 OpenOptions::new()
                     .write(true)
                     .create(true)
@@ -62,5 +77,18 @@ impl SingleInstance {
             .ok();
 
         receiver
+    }
+}
+
+/// 反复尝试加锁，直到旧实例退出或超时。
+fn wait_for_lock(lock: &File) -> Result<(), TryLockError> {
+    let deadline = Instant::now() + WAIT_FOR_INSTANCE_TIMEOUT;
+    loop {
+        thread::sleep(Duration::from_millis(200));
+        match lock.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => continue,
+            Err(error) => return Err(error),
+        }
     }
 }

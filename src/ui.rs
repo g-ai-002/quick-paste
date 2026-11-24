@@ -256,6 +256,23 @@ impl MemoApp {
         }
     }
 
+    /// 托盘左键：显示或隐藏主窗口。
+    pub fn on_tray_toggle(&mut self, cx: &mut Context<Self>) {
+        let visible = paste::is_main_window_visible();
+        if visible && paste::main_window_hidden_recently() {
+            // 点击托盘刚触发失焦自动隐藏，再切换会立刻把窗口弹回来。
+            return;
+        }
+        if visible {
+            self.commit_window_size(cx);
+            self.window_active = false;
+            self.cancel_preview(cx);
+            paste::hide_main_window();
+        } else {
+            self.on_show_request(cx);
+        }
+    }
+
     pub fn on_show_request(&mut self, cx: &mut Context<Self>) {
         self.commit_window_size(cx);
         self.cancel_preview(cx);

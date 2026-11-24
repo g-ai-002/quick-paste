@@ -18,6 +18,10 @@ mod stub {
         None
     }
     pub fn set_main_window(_hwnd: isize) {}
+    pub fn apply_main_window_taskbar_style() {}
+    pub fn main_window_hidden_recently() -> bool {
+        false
+    }
     pub fn move_main_window_to_cursor_display() -> bool {
         false
     }

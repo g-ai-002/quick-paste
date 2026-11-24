@@ -85,6 +85,12 @@ pub struct Settings {
     pub start_hidden: bool,
     /// 主窗口失去焦点时自动隐藏。
     pub auto_hide_on_blur: bool,
+    /// 登录 Windows 后自动启动程序。
+    pub auto_start: bool,
+    /// 下次启动时请求管理员权限。
+    pub run_as_admin: bool,
+    /// 在任务栏通知区显示图标。
+    pub tray_icon: bool,
     /// 未完整显示的备忘录支持悬停预览。
     pub hover_preview: bool,
     pub hover_preview_delay_ms: u64,
@@ -111,6 +117,9 @@ impl Default for Settings {
             show_on_cursor_display: true,
             start_hidden: false,
             auto_hide_on_blur: true,
+            auto_start: false,
+            run_as_admin: false,
+            tray_icon: false,
             hover_preview: true,
             hover_preview_delay_ms: 0,
             max_text_lines: 3,
@@ -299,6 +308,9 @@ mod tests {
         assert_eq!(settings.window_height, WINDOW_HEIGHT_DEFAULT);
         assert!(settings.show_on_cursor_display);
         assert!(settings.auto_hide_on_blur);
+        assert!(!settings.auto_start);
+        assert!(!settings.run_as_admin);
+        assert!(!settings.tray_icon);
         assert!(settings.hover_preview);
         assert_eq!(settings.hover_preview_delay_ms, 0);
         assert_eq!(settings.max_text_lines, 3);

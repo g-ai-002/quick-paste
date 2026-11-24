@@ -1,9 +1,12 @@
 use std::{
     ffi::c_void,
     mem::size_of,
-    sync::atomic::{AtomicIsize, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicIsize, Ordering},
+    },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use gpui_kit::Window;
@@ -20,16 +23,22 @@ use windows::Win32::{
             KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_V,
         },
         WindowsAndMessaging::{
-            GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsIconic,
-            IsWindow, IsWindowVisible, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-            SetForegroundWindow, SetWindowPos, ShowWindow, ShowWindowAsync, SW_HIDE, SW_RESTORE,
-            SW_SHOW, SW_SHOWNOACTIVATE,
+            GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
+            GetWindowThreadProcessId, GWL_EXSTYLE, IsIconic, IsWindow, IsWindowVisible,
+            SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
+            SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_RESTORE, SW_SHOW,
+            SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
         },
     },
 };
 
 static MAIN_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static LAST_TARGET: AtomicIsize = AtomicIsize::new(0);
+// 记录主窗口最近一次被隐藏的时刻，供托盘左键切换区分“刚因失焦自动隐藏”。
+static MAIN_WINDOW_LAST_HIDDEN: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// 判定窗口“刚被隐藏”的时间窗。
+const RECENTLY_HIDDEN_WINDOW: Duration = Duration::from_millis(400);
 
 pub fn start_foreground_tracker() {
     thread::Builder::new()
@@ -55,6 +64,41 @@ pub fn window_hwnd(window: &Window) -> Option<isize> {
 
 pub fn set_main_window(hwnd: isize) {
     MAIN_WINDOW.store(hwnd, Ordering::Relaxed);
+}
+
+/// 主窗口不进任务栏：加 `WS_EX_TOOLWINDOW`、去 `WS_EX_APPWINDOW`。
+///
+/// 必须在窗口可见前调用（窗口以 `show: false` 创建后立即调用），否则 Shell
+/// 会抢先登记任务栏按钮。
+pub fn apply_main_window_taskbar_style() {
+    let hwnd = MAIN_WINDOW.load(Ordering::Relaxed);
+    if hwnd == 0 {
+        return;
+    }
+    let handle = HWND(hwnd as *mut c_void);
+    // SAFETY: hwnd 是本进程记录的窗口句柄；只调整扩展样式，不影响其他窗口。
+    unsafe {
+        let style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
+        let style = (style | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+        SetWindowLongPtrW(handle, GWL_EXSTYLE, style);
+    }
+}
+
+/// 主窗口是否在最近一次定义的时间窗内被隐藏过。
+///
+/// 点击托盘图标会把前台交给任务栏，失焦自动隐藏可能先于托盘事件触发；
+/// 此时托盘左键的“显示/隐藏”切换应视为已隐藏，不再重复处理。
+pub fn main_window_hidden_recently() -> bool {
+    let Ok(hidden) = MAIN_WINDOW_LAST_HIDDEN.lock() else {
+        return false;
+    };
+    hidden.is_some_and(|at| at.elapsed() < RECENTLY_HIDDEN_WINDOW)
+}
+
+fn note_main_window_hidden() {
+    if let Ok(mut hidden) = MAIN_WINDOW_LAST_HIDDEN.lock() {
+        *hidden = Some(Instant::now());
+    }
 }
 
 /// 把主窗口移动到鼠标指针所在显示器的工作区中央。
@@ -153,6 +197,7 @@ pub fn hide_window(window: &Window) {
         return;
     };
     hide_window_now(hwnd);
+    note_main_window_hidden();
     crate::memory_trim::schedule_hidden_trim();
 }
 
@@ -162,6 +207,7 @@ pub fn hide_main_window() {
         return;
     }
     hide_window_now(hwnd);
+    note_main_window_hidden();
     crate::memory_trim::schedule_hidden_trim();
 }
 

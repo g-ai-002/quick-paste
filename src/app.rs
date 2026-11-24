@@ -11,10 +11,10 @@ use gpui_kit::{
 };
 
 use crate::{
-    brand, hotkey, logging, memo, memory_trim, paste, preview, settings, settings_window,
-    single_instance::SingleInstance,
-    source,
-    themes,
+    autostart, brand, elevation, hotkey, logging, memo, memory_trim, paste, preview, settings,
+    settings_window,
+    single_instance::{self, SingleInstance},
+    source, tray, themes,
     ui::MemoApp,
 };
 
@@ -80,7 +80,11 @@ pub fn run() {
     logging::write(format!("设置文件：{}", paths.settings.display()));
     install_panic_hook(paths.crash_log.clone());
 
-    let instance = match SingleInstance::acquire(&paths.runtime_dir) {
+    let instance = match SingleInstance::acquire(
+        &paths.runtime_dir,
+        std::env::args()
+            .any(|arg| arg == single_instance::WAIT_FOR_INSTANCE_ARGUMENT),
+    ) {
         Ok(Some(instance)) => instance,
         Ok(None) => {
             logging::write("已有实例在运行，本次启动退出并唤回已有窗口。");
@@ -108,6 +112,25 @@ pub fn run() {
         }
     };
 
+    // 要求管理员权限时先请求提权重启；新实例带 --wait-instance 等本实例退出锁文件。
+    if initial_settings.run_as_admin
+        && let Ok(false) = elevation::is_elevated()
+    {
+        logging::write("设置要求管理员权限，正在请求提权重启…");
+        match elevation::relaunch_elevated() {
+            Ok(()) => return,
+            Err(error) => {
+                let message = format!("请求管理员权限失败，继续以当前权限运行：{error}");
+                append_log(&paths.crash_log, &message);
+                logging::write(&message);
+            }
+        }
+    }
+    // 让注册表自启项与设置保持一致（exe 路径变化或注册表被清理后自动修复）。
+    if let Err(error) = autostart::set_enabled(initial_settings.auto_start) {
+        logging::write(format!("同步开机自启设置失败：{error}"));
+    }
+
     let data_source = initial_settings.data_source.clone();
     let content_source = source::ContentSource::resolve(&data_source, &paths.memos);
     logging::write(format!("数据源：{}", content_source.location()));
@@ -132,6 +155,8 @@ pub fn run() {
             cx.set_global(InstanceGuard(instance));
 
             let hotkey_receiver = hotkey::install(cx, initial_settings.hotkey.clone());
+            let (tray_sender, tray_receiver) = async_channel::unbounded();
+            tray::install(cx, tray_sender, initial_settings.tray_icon);
             let options = window_options(cx, &initial_settings);
             let (_, view) = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| {
@@ -145,6 +170,11 @@ pub fn run() {
             })
             .unwrap_or_else(|error| panic!("无法创建主窗口：{error}"));
             logging::write("主窗口创建成功。");
+            // 窗口以 show: false 创建：先去掉任务栏样式再显示，避免任务栏出现按钮。
+            paste::apply_main_window_taskbar_style();
+            if !initial_settings.start_hidden {
+                paste::show_main_window();
+            }
 
             if let Err(error) = preview::install(cx) {
                 let message = format!("创建预览窗口失败：{error}");
@@ -152,10 +182,13 @@ pub fn run() {
                 logging::write(&message);
             }
             memory_trim::schedule_startup_cleanup();
-            if initial_settings.start_hidden {
-                paste::hide_main_window();
-            }
             spawn_hotkey_task(cx, view.clone(), hotkey_receiver);
+            spawn_tray_task(
+                cx,
+                view.clone(),
+                tray_receiver,
+                memos_path.clone(),
+            );
             spawn_activation_task(cx, view, activation_receiver);
             logging::write("启动完成。");
         });
@@ -172,6 +205,9 @@ fn window_options(cx: &mut App, settings: &settings::Settings) -> WindowOptions 
             px(settings::WINDOW_WIDTH_MIN),
             px(settings::WINDOW_HEIGHT_MIN),
         )),
+        // 必须等 apply_main_window_taskbar_style 调整完扩展样式再显示，
+        // 避免 Shell 提前登记任务栏按钮。
+        show: false,
         app_id: Some("com.g-ai-002.quick-paste".to_owned()),
         ..Default::default()
     }
@@ -186,6 +222,43 @@ fn spawn_hotkey_task(cx: &mut App, view: Entity<MemoApp>, receiver: Receiver<()>
             }
             last = Instant::now();
             let _ = view.update(cx, |view, cx| view.on_hotkey(cx));
+        }
+    })
+    .detach();
+}
+
+/// 分发托盘命令；数据源按最新设置解析，保证设置窗口拿到当前值。
+fn spawn_tray_task(
+    cx: &mut App,
+    view: Entity<MemoApp>,
+    receiver: Receiver<tray::TrayCommand>,
+    memos_path: PathBuf,
+) {
+    cx.spawn(async move |cx| {
+        while let Ok(command) = receiver.recv().await {
+            match command {
+                tray::TrayCommand::ToggleMainWindow => {
+                    let _ = view.update(cx, |view, cx| view.on_tray_toggle(cx));
+                }
+                tray::TrayCommand::ShowMainWindow => {
+                    let _ = view.update(cx, |view, cx| view.on_show_request(cx));
+                }
+                tray::TrayCommand::OpenSettings => {
+                    let _ = cx.update(|cx| {
+                        let data_source = settings::current(cx).data_source;
+                        let content = source::ContentSource::resolve(&data_source, &memos_path);
+                        if let Err(error) =
+                            settings_window::open(cx, content, memos_path.clone())
+                        {
+                            logging::write(format!("打开设置窗口失败：{error}"));
+                        }
+                    });
+                }
+                tray::TrayCommand::Quit => {
+                    let _ = cx.update(|cx| cx.quit());
+                    break;
+                }
+            }
         }
     })
     .detach();

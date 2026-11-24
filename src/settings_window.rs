@@ -23,9 +23,9 @@ use gpui_kit::{
 };
 
 use crate::{
-    brand,
+    autostart, brand, elevation,
     hotkey::{self, HotkeyChoice},
-    logging, memo,
+    logging, memo, tray,
     settings::{self, ClickAction, PasteAction, Settings},
     source::{ContentSource, DataSourceConfig, SourceKind},
 };
@@ -176,6 +176,27 @@ const SETTING_META: &[SettingMeta] = &[
         title: "启动时隐藏窗口",
         description: "程序启动后只驻留后台，按快捷键才唤出窗口。",
         keywords: &["启动", "后台", "驻留"],
+    },
+    SettingMeta {
+        id: "auto_start",
+        page: SettingsPage::General,
+        title: "开机自启",
+        description: "登录 Windows 后自动启动程序，无需手动打开。",
+        keywords: &["开机", "自启", "启动", "登录", "自启动"],
+    },
+    SettingMeta {
+        id: "run_as_admin",
+        page: SettingsPage::General,
+        title: "管理员启动",
+        description: "以管理员权限运行程序；开启时弹出 UAC 确认并重启程序，关闭后重启生效。",
+        keywords: &["管理员", "权限", "UAC", "提权"],
+    },
+    SettingMeta {
+        id: "tray_icon",
+        page: SettingsPage::General,
+        title: "托盘图标",
+        description: "在任务栏通知区显示图标：左键显示或隐藏主窗口，右键打开菜单。",
+        keywords: &["托盘", "通知区", "图标", "菜单", "右键"],
     },
     SettingMeta {
         id: "hover_preview",
@@ -646,6 +667,20 @@ impl SettingsWindow {
             settings::apply_theme(&next.theme, Some(window), cx);
         }
 
+        if next.tray_icon != previous.tray_icon {
+            tray::sync_visible(cx, next.tray_icon);
+        }
+        if next.auto_start != previous.auto_start {
+            if let Err(error) = autostart::set_enabled(next.auto_start) {
+                // 注册表同步失败时回滚设置，保持界面与系统状态一致。
+                let _ = settings::commit(cx, previous.clone());
+                self.settings = previous;
+                self.notice = Some(format!("无法设置开机自启：{error}").into());
+                cx.notify();
+                return;
+            }
+        }
+
         self.settings = next;
         self.highlight = None;
         self.notice = None;
@@ -750,6 +785,73 @@ impl SettingsWindow {
     ) {
         self.update_settings(window, cx, |settings| {
             settings.start_hidden = value;
+        });
+    }
+
+    fn set_auto_start(
+        &mut self,
+        value: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_settings(window, cx, |settings| {
+            settings.auto_start = value;
+        });
+    }
+
+    fn set_run_as_admin(
+        &mut self,
+        value: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if value == self.settings.run_as_admin {
+            return;
+        }
+        if !value {
+            // 已提权的进程无法降权，只能等下次启动以普通权限运行。
+            self.update_settings(window, cx, |settings| settings.run_as_admin = false);
+            self.notice = Some("已关闭，重新启动程序后以普通权限运行。".into());
+            cx.notify();
+            return;
+        }
+        match elevation::is_elevated() {
+            Ok(true) => {
+                self.update_settings(window, cx, |settings| settings.run_as_admin = true);
+                self.notice = Some("当前已以管理员身份运行。".into());
+            }
+            Ok(false) => {
+                // 先保存设置，新实例启动时再校验权限；UAC 被拒绝则回滚。
+                self.update_settings(window, cx, |settings| settings.run_as_admin = true);
+                if self.settings.run_as_admin {
+                    match elevation::relaunch_elevated() {
+                        Ok(()) => {
+                            cx.quit();
+                        }
+                        Err(error) => {
+                            self.update_settings(window, cx, |settings| {
+                                settings.run_as_admin = false;
+                            });
+                            self.notice = Some(format!("请求管理员权限失败：{error}").into());
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                self.notice = Some(format!("读取管理员权限状态失败：{error}").into());
+            }
+        }
+        cx.notify();
+    }
+
+    fn set_tray_icon(
+        &mut self,
+        value: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_settings(window, cx, |settings| {
+            settings.tray_icon = value;
         });
     }
 
@@ -1036,6 +1138,9 @@ impl SettingsWindow {
                 settings.show_on_cursor_display = defaults.show_on_cursor_display;
                 settings.start_hidden = defaults.start_hidden;
                 settings.auto_hide_on_blur = defaults.auto_hide_on_blur;
+                settings.auto_start = defaults.auto_start;
+                settings.run_as_admin = defaults.run_as_admin;
+                settings.tray_icon = defaults.tray_icon;
             }
             SettingsPage::Preview => {
                 settings.hover_preview = defaults.hover_preview;
@@ -1275,6 +1380,30 @@ impl SettingsWindow {
             cx,
         );
         rows.push(self.setting_row(meta("start_hidden"), control, cx));
+
+        let control = self.bool_switch(
+            "general-auto-start",
+            self.settings.auto_start,
+            Self::set_auto_start,
+            cx,
+        );
+        rows.push(self.setting_row(meta("auto_start"), control, cx));
+
+        let control = self.bool_switch(
+            "general-run-as-admin",
+            self.settings.run_as_admin,
+            Self::set_run_as_admin,
+            cx,
+        );
+        rows.push(self.setting_row(meta("run_as_admin"), control, cx));
+
+        let control = self.bool_switch(
+            "general-tray-icon",
+            self.settings.tray_icon,
+            Self::set_tray_icon,
+            cx,
+        );
+        rows.push(self.setting_row(meta("tray_icon"), control, cx));
 
         let extra = vec![self.info_card(
             "后台驻留",

@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod autostart;
 mod brand;
+mod elevation;
 mod hotkey;
 mod logging;
 mod memo;
@@ -13,6 +15,7 @@ mod settings_window;
 mod single_instance;
 mod source;
 mod themes;
+mod tray;
 mod ui;
 
 fn main() {

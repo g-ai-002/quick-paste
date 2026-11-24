@@ -39,6 +39,13 @@ YAML 文件或 Gitea / Gitee / GitHub / GitLab 仓库里的 YAML 文件，可以
   可切换为单击触发或仅复制到剪贴板。
 - 全局热键：默认 `Ctrl+Shift+X` 显示 / 隐藏窗口，可在设置中录制任意
   `Ctrl` / `Alt` / `Shift` 组合键。
+- 托盘图标：默认关闭；开启后在任务栏通知区显示 logo，左键显示 / 隐藏主窗口，
+  右键打开菜单（打开主窗口、打开设置、退出程序）。
+- 开机自启：默认关闭；开启后写入当前用户的注册表 Run 项，登录 Windows 自动启动。
+- 管理员启动：默认关闭；开启时弹出 UAC 确认并以管理员权限重启程序，
+  也可在开启后手动重启生效。
+- 不占任务栏：主窗口不进入任务栏与 `Alt+Tab`，唤出即用、用完即走；
+  设置窗口的任务栏图标显示程序 logo。
 - 设置窗口：常规、数据源、预览、外观、快捷键、粘贴、关于七个页面，支持跨页面搜索。
 - 主题：内置 GPUI Kit 20+ 主题，可在设置 → 外观切换，选中态跟随主题色。
 - 后台常驻：关闭窗口只是隐藏，再次按热键或重新启动程序即可唤回。
@@ -69,7 +76,8 @@ YAML 文件或 Gitea / Gitee / GitHub / GitLab 仓库里的 YAML 文件，可以
 | `Ctrl+,`                 | 打开设置                                 |
 | `Esc`                    | 清空搜索 / 隐藏窗口                      |
 
-按 `Alt+F4` 关闭只会隐藏窗口；失去焦点时会自动收起。要完全退出程序请点右下角「退出」。
+按 `Alt+F4` 关闭只会隐藏窗口；失去焦点时会自动收起。要完全退出程序请点右下角
+「退出」，或使用托盘菜单的「退出程序」（需在设置中开启托盘图标）。
 
 ## 设置
 
@@ -77,7 +85,8 @@ YAML 文件或 Gitea / Gitee / GitHub / GitLab 仓库里的 YAML 文件，可以
 可以跨页面搜索设置项；大部分修改会立即保存到
 `%LOCALAPPDATA%\QuickPaste\settings.yaml`，数据源页面点「应用」后保存。
 
-- **常规**：在鼠标所在屏幕弹出、失去焦点自动隐藏、启动时隐藏窗口。
+- **常规**：在鼠标所在屏幕弹出、失去焦点自动隐藏、启动时隐藏窗口、
+  开机自启、管理员启动、托盘图标。
 - **数据源**：本地文件、Gitea、Gitee、GitHub、GitLab 五选一；远端数据源填写 YAML 文件
   URL 与 TOKEN，点「应用」后生效。
 - **预览**：悬停预览开关、悬停停留时间（默认 0 秒，可选 0–0.4 秒，0 表示立即显示）、
@@ -214,26 +223,30 @@ pwsh -File scripts/package.ps1 -Arch x64 -PackageType both
 ```text
 src/
 ├── main.rs             入口
-├── app.rs              GPUI 启动、窗口参数、单实例唤回
+├── app.rs              GPUI 启动、窗口参数、提权重启、单实例唤回
+├── autostart.rs        开机自启（注册表 Run 键，Windows）
 ├── brand.rs            应用名称与 logo 展示
+├── elevation.rs        管理员权限检测与 UAC 提权重启（Windows）
 ├── hotkey.rs           全局快捷键注册、自定义录制、切换与状态
 ├── logging.rs          运行日志（app.log）
 ├── memo.rs             YAML 读写、字段合并、排序、搜索、数据目录
 ├── memory_trim.rs      隐藏后清理工作集（Windows）
 ├── paste.rs            粘贴流程（Windows 实现 / 其他平台空实现）
-├── paste/platform.rs   前台窗口跟踪、显示器定位、显示隐藏、SendInput
+├── paste/platform.rs   前台窗口跟踪、显示器定位、显示隐藏、任务栏样式、SendInput
 ├── preview.rs          悬停预览使用的右侧独立弹出窗口
 ├── settings.rs         设置模型、持久化与主题应用
 ├── settings_window.rs  设置窗口（七个页面 + 设置项搜索）
-├── single_instance.rs  文件锁单实例与唤回通知
+├── single_instance.rs  文件锁单实例与唤回通知（支持提权重启等待锁）
 ├── source.rs           本地 / Gitea / Gitee / GitHub / GitLab 数据源与 URL 校验
 ├── themes.rs           内置 GPUI Kit 主题注册
 ├── themes/             21 个内置主题 JSON
+├── tray.rs             托盘图标与原生菜单（Windows）
 └── ui.rs               标签栏、卡片列表、搜索、置顶、悬停预览调度与粘贴界面
 
 assets/logo.svg         备忘纸 + 图钉 logo（界面与 README 用）
-assets/logo.png         备用位图（512×512）
+assets/logo.png         备用位图（512×512），托盘图标从它缩放生成
 assets/icon.ico         安装包与可执行文件图标
+assets/icon.rc          exe 资源定义，build.rs 借此把图标嵌入可执行文件
 scripts/package.ps1     setup + portable 打包
 scripts/generate-icon.ps1  从 logo 设计生成 PNG / ICO
 ```
