@@ -22,8 +22,8 @@ use windows::Win32::{
         WindowsAndMessaging::{
             GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsIconic,
             IsWindow, IsWindowVisible, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-            SetForegroundWindow, SetWindowPos, ShowWindowAsync, SW_HIDE, SW_RESTORE, SW_SHOW,
-            SW_SHOWNOACTIVATE,
+            SetForegroundWindow, SetWindowPos, ShowWindow, ShowWindowAsync, SW_HIDE, SW_RESTORE,
+            SW_SHOW, SW_SHOWNOACTIVATE,
         },
     },
 };
@@ -130,24 +130,29 @@ pub fn show_preview_window(hwnd: isize, x: i32, y: i32, width: i32, height: i32)
     }
 }
 
-pub fn hide_preview_window(hwnd: isize) {
+/// 立即隐藏窗口。
+///
+/// 这里必须用同步的 `ShowWindow`：`ShowWindowAsync` 只投递消息，事件循环
+/// 可能还会再渲染一帧，观感上就像窗口淡出或变慢。
+fn hide_window_now(hwnd: isize) {
     if hwnd == 0 {
         return;
     }
-    // SAFETY: hwnd 是本进程创建的预览窗口。
+    // SAFETY: hwnd 是本进程 UI 线程创建的窗口句柄，同步隐藏不会跨线程阻塞。
     unsafe {
-        let _ = ShowWindowAsync(HWND(hwnd as *mut c_void), SW_HIDE);
+        let _ = ShowWindow(HWND(hwnd as *mut c_void), SW_HIDE);
     }
+}
+
+pub fn hide_preview_window(hwnd: isize) {
+    hide_window_now(hwnd);
 }
 
 pub fn hide_window(window: &Window) {
     let Some(hwnd) = window_hwnd(window) else {
         return;
     };
-    // SAFETY: hwnd 来自当前 GPUI 窗口，ShowWindowAsync 只修改该窗口的显示状态。
-    unsafe {
-        let _ = ShowWindowAsync(HWND(hwnd as *mut c_void), SW_HIDE);
-    }
+    hide_window_now(hwnd);
     crate::memory_trim::schedule_hidden_trim();
 }
 
@@ -156,10 +161,7 @@ pub fn hide_main_window() {
     if hwnd == 0 {
         return;
     }
-    // SAFETY: hwnd 是本进程记录的窗口句柄。
-    unsafe {
-        let _ = ShowWindowAsync(HWND(hwnd as *mut c_void), SW_HIDE);
-    }
+    hide_window_now(hwnd);
     crate::memory_trim::schedule_hidden_trim();
 }
 
