@@ -1694,8 +1694,8 @@ impl SettingsWindow {
 
     fn render_about(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut rows = Vec::new();
-        let theme = cx.theme();
-        let muted_foreground = theme.muted_foreground;
+        let muted_foreground = cx.theme().muted_foreground;
+        let border = cx.theme().border;
 
         let version = div()
             .text_sm()
@@ -1846,8 +1846,8 @@ impl SettingsWindow {
             .items_center()
             .rounded(px(8.0))
             .border_1()
-            .border_color(theme.border)
-            .bg(theme.title_bar)
+            .border_color(border)
+            .bg(cx.theme().title_bar)
             .p_3()
             .child(brand::logo(44.0))
             .child(
