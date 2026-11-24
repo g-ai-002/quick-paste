@@ -30,17 +30,20 @@ use crate::{
 };
 
 const ROW_LINE_HEIGHT: f32 = 22.0;
-const ROW_TAG_HEIGHT: f32 = 20.0;
+const ROW_FOOTER_HEIGHT: f32 = 16.0;
+const ROW_FOOTER_FONT_SIZE: f32 = 11.0;
+const ROW_DIVIDER_HEIGHT: f32 = 1.0;
 const ROW_MARGIN_X: f32 = 8.0;
 const ROW_PADDING_X: f32 = 12.0;
-const ROW_PADDING_Y: f32 = 12.0;
+const ROW_PADDING_TOP: f32 = 12.0;
+const ROW_PADDING_BOTTOM: f32 = 10.0;
 const ROW_CONTENT_GAP: f32 = 4.0;
 const ROW_GAP: f32 = 8.0;
 const PIN_SIZE: f32 = 28.0;
 const PIN_INSET: f32 = 6.0;
 const ROW_TEXT_RIGHT: f32 = PIN_SIZE + PIN_INSET + 6.0;
 const TAG_ROW_HEIGHT: f32 = 30.0;
-// 卡片正文按约 48 个半角字符估算换行；列表再窄会让估算失准，因此标签栏不能挤占到这里以下。
+// 卡片正文按实际可用宽度估算换行；列表再窄会让估算失准，因此标签栏不能挤占到这里以下。
 const MIN_MEMO_LIST_WIDTH: f32 = 410.0;
 
 pub struct MemoApp {
@@ -53,6 +56,7 @@ pub struct MemoApp {
     settings: settings::Settings,
     filtered: Rc<Vec<usize>>,
     row_sizes: Rc<Vec<Size<Pixels>>>,
+    line_units: usize,
     list_scroll: VirtualListScrollHandle,
     smooth_scroll: SmoothScroll,
     search: Entity<InputState>,
@@ -152,12 +156,15 @@ impl MemoApp {
         if content_source.is_remote() && notice.is_none() {
             notice = Some("正在加载远端数据源…".into());
         }
+        let line_units =
+            Self::line_units_for_window(app_settings.window_width, &app_settings);
         let tags = memo::sorted_tags(&memos);
         let filtered = Rc::new(memo::matching_indices(&memos, ""));
         let row_sizes = Rc::new(Self::compute_row_sizes(
             &memos,
             filtered.as_slice(),
             &app_settings,
+            line_units,
         ));
 
         window.on_window_should_close(cx, |window, cx| {
@@ -207,6 +214,7 @@ impl MemoApp {
             settings: app_settings,
             filtered,
             row_sizes,
+            line_units,
             list_scroll: VirtualListScrollHandle::new(),
             smooth_scroll: SmoothScroll::default(),
             search,
@@ -283,6 +291,8 @@ impl MemoApp {
             return;
         };
         let text = SharedString::from(memo.text.clone());
+        let description = (!memo.description.is_empty())
+            .then(|| SharedString::from(memo.description.clone()));
         let tags = if memo.tags.is_empty() {
             None
         } else {
@@ -294,15 +304,21 @@ impl MemoApp {
                     .join("  "),
             ))
         };
-        let tags_truncated = tags.as_ref().is_some_and(|tags| {
-            tags.as_ref()
-                .chars()
-                .map(|ch| if ch.is_ascii() { 1 } else { 2 })
-                .sum::<usize>()
-                > 60
-        });
-        let truncated = memo::is_truncated(text.as_ref(), self.settings.max_text_lines);
-        if !self.settings.hover_preview || !(truncated || tags_truncated) {
+        let footer_threshold = (self.line_units * 2 / 3).max(24);
+        let description_truncated = description
+            .as_ref()
+            .is_some_and(|description| text_units(description.as_ref()) > footer_threshold);
+        let tags_truncated = tags
+            .as_ref()
+            .is_some_and(|tags| text_units(tags.as_ref()) > footer_threshold);
+        let truncated = memo::is_truncated(
+            text.as_ref(),
+            self.settings.max_text_lines,
+            self.line_units,
+        );
+        if !self.settings.hover_preview
+            || !(truncated || description_truncated || tags_truncated)
+        {
             self.cancel_preview(cx);
             return;
         }
@@ -313,6 +329,7 @@ impl MemoApp {
 
         let content = preview::PreviewContent {
             text,
+            description,
             tags,
             usage_count: memo.usage_count,
             pinned: memo.is_pinned,
@@ -490,11 +507,7 @@ impl MemoApp {
         }
 
         let window_width = f32::from(window.bounds().size.width);
-        let width = self
-            .settings
-            .tag_sidebar_width
-            .min(window_width - MIN_MEMO_LIST_WIDTH)
-            .max(settings::TAG_SIDEBAR_WIDTH_MIN);
+        let width = Self::sidebar_width(window_width, &self.settings);
         let theme = cx.theme();
         v_flex()
             .w(px(width))
@@ -535,7 +548,7 @@ impl MemoApp {
             (
                 theme.secondary,
                 theme.secondary_foreground,
-                theme.sidebar_foreground,
+                theme.muted_foreground,
                 theme.sidebar_accent,
                 theme.sidebar_accent_foreground,
             )
@@ -557,7 +570,7 @@ impl MemoApp {
             .items_center()
             .px_2()
             .rounded(px(6.0))
-            .text_sm()
+            .text_xs()
             .cursor_pointer()
             .when(selected, |this| {
                 this.bg(selected_bg).text_color(selected_fg)
@@ -629,7 +642,7 @@ impl MemoApp {
             .filtered
             .iter()
             .filter_map(|index| self.memos.get(*index))
-            .map(|memo| Self::row_height(memo, &self.settings))
+            .map(|memo| Self::row_height(memo, &self.settings, self.line_units))
             .sum();
         let scroll_size = size(px(0.0), px(scroll_height));
 
@@ -657,6 +670,8 @@ impl MemoApp {
         };
 
         let text = SharedString::from(memo.text.clone());
+        let description: Option<SharedString> = (!memo.description.is_empty())
+            .then(|| SharedString::from(memo.description.clone()));
         let tags: Option<SharedString> = if memo.tags.is_empty() {
             None
         } else {
@@ -668,10 +683,15 @@ impl MemoApp {
                     .join("  "),
             ))
         };
+        let has_footer = description.is_some() || tags.is_some();
+        let both_footer_parts = description.is_some() && tags.is_some();
+        let footer_content_width = self.line_units as f32 * 7.2 + ROW_TEXT_RIGHT;
+        let tags_max_width = (footer_content_width * 0.5).max(96.0);
         let max_lines = self.settings.max_text_lines;
-        let line_count = memo::display_line_count(text.as_ref(), max_lines);
+        let line_count =
+            memo::display_line_count(text.as_ref(), max_lines, self.line_units);
         let pinned = memo.is_pinned;
-        let row_height = Self::row_height(memo, &self.settings);
+        let row_height = Self::row_height(memo, &self.settings, self.line_units);
         let card_height = row_height - ROW_GAP;
         let card_radius = self.settings.card_radius;
         let click_action = self.settings.click_action;
@@ -682,6 +702,7 @@ impl MemoApp {
         let primary = cx.theme().primary;
         let pin_hover_bg = cx.theme().muted;
         let muted_foreground = cx.theme().muted_foreground;
+        let border = cx.theme().border;
 
         let card = v_flex()
             .id(("memo-card", index))
@@ -693,7 +714,8 @@ impl MemoApp {
             .rounded(px(card_radius))
             .bg(card_bg)
             .px(px(ROW_PADDING_X))
-            .py(px(ROW_PADDING_Y))
+            .pt(px(ROW_PADDING_TOP))
+            .pb(px(ROW_PADDING_BOTTOM))
             .when(hovered, |this| this.shadow_sm())
             .on_hover(cx.listener(move |this, is_hovered: &bool, window, cx| {
                 let next = if *is_hovered {
@@ -739,16 +761,45 @@ impl MemoApp {
                     .line_clamp(line_count)
                     .child(text),
             )
-            .children(tags.map(|tags| {
+            .children(has_footer.then(|| {
                 div()
                     .w_full()
                     .flex_shrink_0()
-                    .h(px(ROW_TAG_HEIGHT))
-                    .truncate()
-                    .text_xs()
-                    .line_height(px(ROW_TAG_HEIGHT))
+                    .h(px(ROW_DIVIDER_HEIGHT))
+                    .border_t_1()
+                    .border_dashed()
+                    .border_color(border)
+                    .opacity(0.7)
+            }))
+            .children(has_footer.then(|| {
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .h(px(ROW_FOOTER_HEIGHT))
+                    .items_center()
+                    .gap(px(8.0))
+                    .text_size(px(ROW_FOOTER_FONT_SIZE))
+                    .line_height(px(ROW_FOOTER_HEIGHT))
                     .text_color(muted_foreground)
-                    .child(tags)
+                    .children(description.map(|description| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(description)
+                    }))
+                    .children(tags.map(|tags| {
+                        let tags = div()
+                            .min_w_0()
+                            .truncate()
+                            .text_right()
+                            .child(tags);
+                        if both_footer_parts {
+                            tags.max_w(px(tags_max_width))
+                        } else {
+                            tags.flex_1()
+                        }
+                    }))
             }))
             .children((pinned || hovered).then(|| {
                 div()
@@ -1232,6 +1283,7 @@ impl MemoApp {
             &self.memos,
             filtered.as_slice(),
             &self.settings,
+            self.line_units,
         ));
         self.filtered = Rc::new(filtered);
     }
@@ -1272,26 +1324,76 @@ impl MemoApp {
         }
     }
 
+    fn sidebar_width(window_width: f32, settings: &settings::Settings) -> f32 {
+        settings
+            .tag_sidebar_width
+            .min(window_width - MIN_MEMO_LIST_WIDTH)
+            .max(settings::TAG_SIDEBAR_WIDTH_MIN)
+    }
+
+    fn line_units_for_window(window_width: f32, settings: &settings::Settings) -> usize {
+        let sidebar = Self::sidebar_width(window_width, settings);
+        let text_width = window_width
+            - sidebar
+            - ROW_MARGIN_X * 2.0
+            - ROW_PADDING_X * 2.0
+            - ROW_TEXT_RIGHT;
+        memo::line_units_for_width(text_width)
+    }
+
+    /// 窗口宽度变化后重新估算正文换行数；行高缓存必须与当前宽度一致。
+    fn sync_line_units(&mut self, window: &Window) {
+        let line_units = Self::line_units_for_window(
+            f32::from(window.bounds().size.width),
+            &self.settings,
+        );
+        if line_units == self.line_units {
+            return;
+        }
+        self.line_units = line_units;
+        self.row_sizes = Rc::new(Self::compute_row_sizes(
+            &self.memos,
+            self.filtered.as_slice(),
+            &self.settings,
+            self.line_units,
+        ));
+    }
+
     fn compute_row_sizes(
         memos: &[memo::Memo],
         filtered: &[usize],
         settings: &settings::Settings,
+        line_units: usize,
     ) -> Vec<Size<Pixels>> {
         filtered
             .iter()
             .filter_map(|index| memos.get(*index))
-            .map(|memo| size(px(0.0), px(Self::row_height(memo, settings))))
+            .map(|memo| {
+                size(
+                    px(0.0),
+                    px(Self::row_height(memo, settings, line_units)),
+                )
+            })
             .collect()
     }
 
-    fn row_height(memo: &memo::Memo, settings: &settings::Settings) -> f32 {
-        let lines = memo::display_line_count(&memo.text, settings.max_text_lines) as f32;
-        let tags = if memo.tags.is_empty() {
+    fn row_height(
+        memo: &memo::Memo,
+        settings: &settings::Settings,
+        line_units: usize,
+    ) -> f32 {
+        let lines =
+            memo::display_line_count(&memo.text, settings.max_text_lines, line_units) as f32;
+        let footer = if memo.description.is_empty() && memo.tags.is_empty() {
             0.0
         } else {
-            ROW_CONTENT_GAP + ROW_TAG_HEIGHT
+            ROW_CONTENT_GAP * 2.0 + ROW_DIVIDER_HEIGHT + ROW_FOOTER_HEIGHT
         };
-        ROW_PADDING_Y * 2.0 + lines * ROW_LINE_HEIGHT + tags + ROW_GAP
+        ROW_PADDING_TOP
+            + lines * ROW_LINE_HEIGHT
+            + footer
+            + ROW_PADDING_BOTTOM
+            + ROW_GAP
     }
 }
 
@@ -1301,6 +1403,7 @@ impl Render for MemoApp {
             paste::set_main_window(hwnd);
         }
         self.sync_settings(cx);
+        self.sync_line_units(window);
         if self.pending_reload {
             let weak = cx.entity().downgrade();
             cx.defer(move |cx| {
@@ -1370,6 +1473,12 @@ fn save_window_size(window: &Window, cx: &mut App) {
     if let Err(error) = settings::commit(cx, next) {
         logging::write(format!("保存窗口尺寸失败：{error}"));
     }
+}
+
+fn text_units(text: &str) -> usize {
+    text.chars()
+        .map(|ch| if ch.is_ascii() { 1 } else { 2 })
+        .sum()
 }
 
 fn render_empty_state(

@@ -181,7 +181,7 @@ const SETTING_META: &[SettingMeta] = &[
         id: "hover_preview",
         page: SettingsPage::Preview,
         title: "悬停预览完整内容",
-        description: "鼠标停在未完整显示的卡片上时，在卡片右侧弹出完整文本、标签与使用次数。",
+        description: "鼠标停在未完整显示的卡片上时，在卡片右侧弹出完整文本、备注、标签与使用次数。",
         keywords: &["悬停", "预览", "完整"],
     },
     SettingMeta {
@@ -293,7 +293,7 @@ const SETTING_META: &[SettingMeta] = &[
         id: "about_source",
         page: SettingsPage::About,
         title: "数据源",
-        description: "当前使用的数据源；远端地址不显示 TOKEN，程序只读取其中的 text 和 tags。",
+        description: "当前使用的数据源；远端地址不显示 TOKEN，程序只读取其中的 text、description 和 tags。",
         keywords: &["YAML", "数据源", "memos"],
     },
     SettingMeta {

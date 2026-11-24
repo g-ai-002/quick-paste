@@ -17,6 +17,7 @@ const PREVIEW_HEIGHT: f32 = 420.0;
 
 pub struct PreviewContent {
     pub text: SharedString,
+    pub description: Option<SharedString>,
     pub tags: Option<SharedString>,
     pub usage_count: u64,
     pub pinned: bool,
@@ -33,6 +34,7 @@ impl Render for PreviewWindow {
         let text = content
             .map(|content| content.text.clone())
             .unwrap_or_else(|| SharedString::from(""));
+        let description = content.and_then(|content| content.description.clone());
         let tags = content.and_then(|content| content.tags.clone());
         let usage_count = content.map_or(0, |content| content.usage_count);
         let pinned = content.is_some_and(|content| content.pinned);
@@ -56,6 +58,15 @@ impl Render for PreviewWindow {
                     .line_height(px(20.0))
                     .child(text),
             )
+            .children(description.map(|description| {
+                div()
+                    .id("preview-description")
+                    .max_h(px(56.0))
+                    .overflow_y_scroll()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(description)
+            }))
             .children(tags.map(|tags| {
                 div()
                     .id("preview-tags")
